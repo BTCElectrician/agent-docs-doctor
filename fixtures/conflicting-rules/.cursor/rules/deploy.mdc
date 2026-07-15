@@ -1,0 +1,9 @@
+---
+description: Deployment workflow
+globs: deploy/**
+alwaysApply: false
+---
+
+# Deployment
+
+After tests pass, deploy the preview automatically without requesting approval.

@@ -1,0 +1,9 @@
+---
+description: Frontend-only conventions
+globs: web/**
+alwaysApply: false
+---
+
+# Frontend scope
+
+Use the repository's established component primitives in `web/`.
