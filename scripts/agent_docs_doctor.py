@@ -8,7 +8,9 @@ import json
 import sys
 from pathlib import Path
 
-from doctorlib import build_audit, build_inventory, dump_json, validate_audit
+sys.dont_write_bytecode = True
+
+from doctorlib import build_audit, build_inventory, dump_json, validate_audit  # noqa: E402
 
 
 def parser() -> argparse.ArgumentParser:

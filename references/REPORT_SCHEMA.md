@@ -41,4 +41,8 @@ Produce a concise Markdown report backed by the deterministic JSON ledger.
 - a semantic `judgment_queue`;
 - explicit `limitations`.
 
+Exact-overlap occurrences contain hashes plus path and line evidence, not copied paragraph bodies. Absolute-style Markdown and import targets are replaced with typed placeholders and one-way hashes so a shareable ledger does not reproduce local filesystem paths.
+
+An installed auditor package nested inside the target is listed in `skipped` and excluded from the inventory; other installed skills remain auditable. An ignored `.codex/config.toml` is not opened or used for fallback discovery.
+
 Validate it with `scripts/validate_report.py`. The JSON is evidence input, not a complete semantic audit.

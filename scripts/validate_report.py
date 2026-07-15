@@ -7,7 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from doctorlib import validate_audit
+sys.dont_write_bytecode = True
+
+from doctorlib import validate_audit  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:

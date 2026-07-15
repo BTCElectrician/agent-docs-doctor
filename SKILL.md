@@ -27,13 +27,15 @@ Confirm the repository root and requested output. Note any user-declared private
 Run:
 
 ```bash
-python3 scripts/agent_docs_doctor.py audit <repo> --pretty > /tmp/agent-docs-audit.json
-python3 scripts/validate_report.py /tmp/agent-docs-audit.json
+python3 -B scripts/agent_docs_doctor.py audit <repo> --pretty > /tmp/agent-docs-audit.json
+python3 -B scripts/validate_report.py /tmp/agent-docs-audit.json
 ```
 
 If the skill is installed outside the target repository, resolve `scripts/` relative to this `SKILL.md`. Keep temporary output outside the audited repository unless the user requests an artifact there.
 
-Review skipped files, warnings, discovered surfaces, exact-overlap groups, local references, archive classification, and deterministic findings. A skipped or unreadable file is an audit limitation, not proof that it is irrelevant.
+Review skipped files, warnings, discovered surfaces, exact-overlap groups, local references, archive classification, and deterministic findings. The ledger omits overlap paragraph bodies and sanitizes absolute-style reference targets. A skipped or unreadable file is an audit limitation, not proof that it is irrelevant.
+
+When run from an installation inside the target repository, the engine reports and excludes its own package directory so the tool does not create evidence about itself. Other installed skills remain in scope.
 
 ### 3. Reconstruct the instruction architecture
 

@@ -8,11 +8,14 @@ import hashlib
 import json
 import os
 import re
+import sys
 from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+sys.dont_write_bytecode = True
 
 SCHEMA_VERSION = "agent-docs-doctor.audit.v1"
 INVENTORY_VERSION = "agent-docs-doctor.inventory.v1"
@@ -69,8 +72,12 @@ NAME_HINT = re.compile(
 
 TEXT_SUFFIXES = {".md", ".mdc", ".txt", ".yaml", ".yml", ".json", ".toml"}
 ARCHIVE_PARTS = {"archive", "archived", "retired", "deprecated", "history"}
-MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+MARKDOWN_LINK_START = re.compile(r"(?<!!)\[[^\]\n]+\]\(")
 IMPORT_LINE = re.compile(r"(?m)^\s*@([^\s#]+)\s*$")
+CODEX_FALLBACK_LIST = re.compile(
+    r"(?ms)^\s*project_doc_fallback_filenames\s*=\s*\[(.*?)\]"
+)
+TOML_QUOTED_STRING = re.compile(r'"((?:\\.|[^"\\])*)"|\'([^\']*)\'')
 
 
 @dataclass(frozen=True)
@@ -79,20 +86,22 @@ class IgnoreRule:
     negate: bool
     directory_only: bool
     anchored: bool
+    base: PurePosixPath
 
 
 class IgnoreMatcher:
     """Small deterministic gitignore-style matcher for non-git and test repos."""
 
     def __init__(self, root: Path) -> None:
+        self.root = root
         self.rules: list[IgnoreRule] = []
         for filename in (".gitignore", ".ignore", ".agent-docs-doctorignore"):
             path = root / filename
             if path.is_file() and not is_secret_path(path):
-                self.rules.extend(self._parse(path))
+                self.rules.extend(self._parse(path, PurePosixPath(".")))
 
     @staticmethod
-    def _parse(path: Path) -> list[IgnoreRule]:
+    def _parse(path: Path, base: PurePosixPath) -> list[IgnoreRule]:
         rules: list[IgnoreRule] = []
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -110,30 +119,39 @@ class IgnoreMatcher:
             directory_only = line.endswith("/")
             line = line.rstrip("/")
             if line:
-                rules.append(IgnoreRule(line, negate, directory_only, anchored))
+                rules.append(IgnoreRule(line, negate, directory_only, anchored, base))
         return rules
 
+    def add_nested_gitignore(self, directory: Path, relative: PurePosixPath) -> None:
+        if relative == PurePosixPath("."):
+            return
+        path = directory / ".gitignore"
+        if path.is_file() and not path.is_symlink():
+            self.rules.extend(self._parse(path, relative))
+
     def ignored(self, relative: PurePosixPath, is_dir: bool = False) -> bool:
-        text = relative.as_posix()
         parts = relative.parts
         ignored = any(part in DEFAULT_IGNORED_DIRS for part in parts)
         for rule in self.rules:
-            if rule.directory_only and not (is_dir or any(fnmatch.fnmatch(p, rule.pattern) for p in parts)):
+            try:
+                scoped = relative.relative_to(rule.base)
+            except ValueError:
                 continue
-            if rule.anchored:
-                matched = fnmatch.fnmatch(text, rule.pattern) or text.startswith(rule.pattern + "/")
-            elif "/" in rule.pattern:
-                matched = fnmatch.fnmatch(text, rule.pattern) or fnmatch.fnmatch(text, f"**/{rule.pattern}")
+            scoped_text = scoped.as_posix()
+            scoped_parts = scoped.parts
+            if rule.directory_only:
+                if rule.anchored or "/" in rule.pattern:
+                    matched = scoped_text == rule.pattern or scoped_text.startswith(rule.pattern + "/")
+                else:
+                    directory_parts = scoped_parts if is_dir else scoped_parts[:-1]
+                    matched = any(fnmatch.fnmatch(part, rule.pattern) for part in directory_parts)
+            elif rule.anchored or "/" in rule.pattern:
+                matched = fnmatch.fnmatch(scoped_text, rule.pattern)
             else:
-                matched = any(fnmatch.fnmatch(part, rule.pattern) for part in parts)
+                matched = any(fnmatch.fnmatch(part, rule.pattern) for part in scoped_parts)
             if matched:
                 ignored = not rule.negate
         return ignored
-
-    def may_reinclude_below(self, relative: PurePosixPath) -> bool:
-        """Return whether a negation rule may restore a path below a directory."""
-        prefix = relative.as_posix().rstrip("/") + "/"
-        return any(rule.negate and rule.pattern.lstrip("/").startswith(prefix) for rule in self.rules)
 
 
 def is_secret_path(path: Path | PurePosixPath) -> bool:
@@ -143,13 +161,15 @@ def is_secret_path(path: Path | PurePosixPath) -> bool:
     return name.endswith(SECRET_SUFFIXES)
 
 
-def is_candidate(relative: PurePosixPath) -> bool:
+def is_candidate(relative: PurePosixPath, fallback_names: frozenset[str] = frozenset()) -> bool:
     if is_secret_path(relative):
         return False
     name = relative.name.lower()
     suffix = relative.suffix.lower()
     parts_lower = tuple(part.lower() for part in relative.parts)
     if name in EXACT_NAMES:
+        return True
+    if relative.name in fallback_names:
         return True
     if len(parts_lower) >= 2 and parts_lower[-2] == "rules" and (
         ".claude" in parts_lower or ".cursor" in parts_lower
@@ -164,17 +184,54 @@ def is_candidate(relative: PurePosixPath) -> bool:
     return suffix in TEXT_SUFFIXES and bool(NAME_HINT.search(relative.stem))
 
 
-def walk_candidates(root: Path) -> tuple[list[Path], list[dict[str, str]]]:
+def codex_fallback_filenames(root: Path) -> tuple[str, ...]:
+    path = root / ".codex" / "config.toml"
+    matcher = IgnoreMatcher(root)
+    if matcher.ignored(PurePosixPath(".codex/config.toml")):
+        return ()
+    text, warning = read_text(path) if path.is_file() and not path.is_symlink() else (None, None)
+    if text is None or warning:
+        return ()
+    match = CODEX_FALLBACK_LIST.search(text)
+    if not match:
+        return ()
+    names: list[str] = []
+    for double_quoted, single_quoted in TOML_QUOTED_STRING.findall(match.group(1)):
+        try:
+            value = (
+                json.JSONDecoder().decode(f'"{double_quoted}"')
+                if double_quoted
+                else single_quoted
+            )
+        except json.JSONDecodeError:
+            continue
+        if value and Path(value).name == value and not is_secret_path(PurePosixPath(value)):
+            names.append(value)
+    return tuple(dict.fromkeys(names))
+
+
+def walk_candidates(
+    root: Path,
+    fallback_names: frozenset[str],
+    excluded_roots: frozenset[PurePosixPath] = frozenset(),
+) -> tuple[list[Path], list[dict[str, str]]]:
     matcher = IgnoreMatcher(root)
     candidates: list[Path] = []
+    symlink_candidates: list[Path] = []
     skipped: list[dict[str, str]] = []
     for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
         current_path = Path(current)
         rel_current = current_path.relative_to(root)
+        matcher.add_nested_gitignore(current_path, PurePosixPath(rel_current.as_posix()))
         kept_dirs: list[str] = []
         for dirname in sorted(dirs):
             rel = PurePosixPath((rel_current / dirname).as_posix())
-            if matcher.ignored(rel, is_dir=True) and not matcher.may_reinclude_below(rel):
+            if rel in excluded_roots:
+                skipped.append(
+                    {"path": rel.as_posix(), "reason": "auditor's installed package excluded"}
+                )
+                continue
+            if matcher.ignored(rel, is_dir=True):
                 continue
             kept_dirs.append(dirname)
         dirs[:] = kept_dirs
@@ -187,13 +244,33 @@ def walk_candidates(root: Path) -> tuple[list[Path], list[dict[str, str]]]:
                 if NAME_HINT.search(rel.stem) or rel.name.lower() in EXACT_NAMES:
                     skipped.append({"path": rel.as_posix(), "reason": "secret-like filename"})
                 continue
-            if is_candidate(rel):
+            if is_candidate(rel, fallback_names):
+                if path.is_symlink():
+                    symlink_candidates.append(path)
+                    continue
                 try:
                     path.resolve().relative_to(root.resolve())
                 except (OSError, ValueError):
                     skipped.append({"path": rel.as_posix(), "reason": "symlink escapes audit root"})
                     continue
                 candidates.append(path)
+    for path in symlink_candidates:
+        rel = PurePosixPath(path.relative_to(root).as_posix())
+        try:
+            resolved = path.resolve(strict=True)
+            target_relative = PurePosixPath(resolved.relative_to(root.resolve()).as_posix())
+        except (OSError, ValueError):
+            skipped.append({"path": rel.as_posix(), "reason": "symlink escapes audit root"})
+            continue
+        if (
+            is_secret_path(target_relative)
+            or matcher.ignored(target_relative)
+            or not resolved.is_file()
+            or not is_candidate(target_relative, fallback_names)
+        ):
+            skipped.append({"path": rel.as_posix(), "reason": "symlink target excluded from audit"})
+            continue
+        candidates.append(path)
     candidates.sort(key=lambda p: p.relative_to(root).as_posix())
     skipped.sort(key=lambda item: item["path"])
     return candidates, skipped
@@ -236,7 +313,12 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str | None]:
     return metadata, None
 
 
-def classify(relative: PurePosixPath, metadata: dict[str, Any]) -> dict[str, Any]:
+def classify(
+    relative: PurePosixPath,
+    metadata: dict[str, Any],
+    fallback_names: frozenset[str],
+    selected_codex_paths: frozenset[str],
+) -> dict[str, Any]:
     name = relative.name.lower()
     parts = tuple(part.lower() for part in relative.parts)
     archive = any(part in ARCHIVE_PARTS for part in parts[:-1])
@@ -245,9 +327,19 @@ def classify(relative: PurePosixPath, metadata: dict[str, Any]) -> dict[str, Any
         metadata.get("retired")
     )
 
-    if name.startswith("agents"):
-        kind, platforms, loading, role = "instruction", ["codex", "cursor"], "automatic", "authority"
-    elif name.startswith("claude"):
+    relative_text = relative.as_posix()
+    selected_by_codex = relative_text in selected_codex_paths
+
+    if name == "agents.override.md":
+        kind, platforms, loading, role = "instruction", ["codex"], "automatic", "authority"
+    elif name == "agents.md":
+        platforms = ["cursor"] + (["codex"] if selected_by_codex else [])
+        kind, loading, role = "instruction", "automatic", "authority"
+    elif relative.name in fallback_names:
+        kind, platforms = "instruction-candidate", ["codex"]
+        loading = "automatic" if selected_by_codex else "not-loaded"
+        role = "authority" if selected_by_codex else "reference"
+    elif name in {"claude.md", "claude.local.md"}:
         kind, platforms, loading, role = "instruction", ["claude-code"], "automatic", "adapter"
     elif ".claude" in parts and "rules" in parts:
         scoped = "paths" in metadata
@@ -292,11 +384,58 @@ def line_for_offset(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def markdown_link_payloads(text: str) -> Iterator[tuple[str, int]]:
+    for match in MARKDOWN_LINK_START.finditer(text):
+        index = match.end()
+        start = index
+        depth = 1
+        escaped = False
+        while index < len(text):
+            char = text[index]
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    yield text[start:index], match.start()
+                    break
+            index += 1
+
+
+def markdown_destination(payload: str) -> str:
+    value = payload.strip()
+    if value.startswith("<") and ">" in value:
+        return value[1 : value.index(">")]
+    escaped = False
+    for index, char in enumerate(value):
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char.isspace():
+            return value[:index]
+    return value
+
+
+def sanitized_reference_target(target: str) -> tuple[str, str | None, str]:
+    if target.startswith("/"):
+        digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
+        return "<root-relative-path>", digest, "root-relative"
+    if target.startswith(("~/", "\\\\")) or re.match(r"^[A-Za-z]:[\\/]", target):
+        digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
+        return "<absolute-filesystem-path>", digest, "absolute-filesystem"
+    return target, None, "relative"
+
+
 def local_references(text: str, relative: PurePosixPath, root: Path) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
-    matches = list(MARKDOWN_LINK.finditer(text)) + list(IMPORT_LINE.finditer(text))
-    for match in sorted(matches, key=lambda item: item.start()):
-        raw = match.group(1).strip().strip("<>")
+    raw_matches = [(markdown_destination(raw), start) for raw, start in markdown_link_payloads(text)]
+    raw_matches.extend((match.group(1).strip(), match.start()) for match in IMPORT_LINE.finditer(text))
+    for raw, start in sorted(raw_matches, key=lambda item: item[1]):
         target = raw.split("#", 1)[0]
         if not target or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE) or target.startswith("#"):
             continue
@@ -308,14 +447,17 @@ def local_references(text: str, relative: PurePosixPath, root: Path) -> list[dic
             inside = True
         except ValueError:
             inside = False
-        refs.append(
-            {
-                "target": target,
-                "line": line_for_offset(text, match.start()),
-                "inside_root": inside,
-                "exists": candidate.exists() if inside else None,
-            }
-        )
+        display_target, target_sha256, target_kind = sanitized_reference_target(target)
+        reference = {
+            "target": display_target,
+            "target_kind": target_kind,
+            "line": line_for_offset(text, start),
+            "inside_root": inside,
+            "exists": candidate.exists() if inside else None,
+        }
+        if target_sha256:
+            reference["target_sha256"] = target_sha256
+        refs.append(reference)
     return refs
 
 
@@ -330,7 +472,6 @@ def paragraph_blocks(text: str, path: str) -> Iterator[dict[str, Any]]:
         yield {
             "path": path,
             "line": line_for_offset(text, start),
-            "text": normalized,
             "sha256": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
         }
 
@@ -339,7 +480,31 @@ def build_inventory(root_value: str | Path) -> dict[str, Any]:
     root = Path(root_value).resolve()
     if not root.is_dir():
         raise ValueError(f"not a directory: {root_value}")
-    paths, skipped = walk_candidates(root)
+    fallback_sequence = codex_fallback_filenames(root)
+    fallback_names = frozenset(fallback_sequence)
+    excluded_roots: set[PurePosixPath] = set()
+    auditor_package = Path(__file__).resolve().parent.parent
+    try:
+        relative_package = auditor_package.relative_to(root)
+    except ValueError:
+        pass
+    else:
+        if relative_package != Path("."):
+            excluded_roots.add(PurePosixPath(relative_package.as_posix()))
+    paths, skipped = walk_candidates(root, fallback_names, frozenset(excluded_roots))
+    selected_codex: set[str] = set()
+    by_directory: dict[PurePosixPath, dict[str, Path]] = defaultdict(dict)
+    for path in paths:
+        relative = PurePosixPath(path.relative_to(root).as_posix())
+        if path.stat().st_size > 0:
+            by_directory[relative.parent][relative.name] = path
+    for directory, names in by_directory.items():
+        for candidate_name in ("AGENTS.override.md", "AGENTS.md", *fallback_sequence):
+            if candidate_name in names:
+                selected = PurePosixPath(directory / candidate_name).as_posix()
+                selected_codex.add(selected)
+                break
+    selected_codex_paths = frozenset(selected_codex)
     files: list[dict[str, Any]] = []
     warnings: list[dict[str, str]] = []
     all_blocks: list[dict[str, Any]] = []
@@ -369,7 +534,7 @@ def build_inventory(root_value: str | Path) -> dict[str, Any]:
             "sha256": digest,
             "metadata": metadata,
             "references": refs,
-            **classify(relative, metadata),
+            **classify(relative, metadata, fallback_names, selected_codex_paths),
         }
         files.append(entry)
 
@@ -482,11 +647,59 @@ def validate_audit(data: Any) -> list[str]:
         errors.append(f"schema_version must be {SCHEMA_VERSION!r}")
     if data.get("mode") != "read-only":
         errors.append("mode must be 'read-only'")
+    for key in ("inventory", "findings", "judgment_queue", "limitations"):
+        if key not in data:
+            errors.append(f"report missing {key}")
+    for key in ("judgment_queue", "limitations"):
+        value = data.get(key)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            errors.append(f"{key} must be an array of strings")
     inventory = data.get("inventory")
     if not isinstance(inventory, dict):
         errors.append("inventory must be an object")
-    elif inventory.get("schema_version") != INVENTORY_VERSION:
-        errors.append(f"inventory.schema_version must be {INVENTORY_VERSION!r}")
+    else:
+        if inventory.get("schema_version") != INVENTORY_VERSION:
+            errors.append(f"inventory.schema_version must be {INVENTORY_VERSION!r}")
+        inventory_types = {
+            "root": str,
+            "files": list,
+            "exact_overlap_groups": list,
+            "skipped": list,
+            "warnings": list,
+        }
+        for key, expected_type in inventory_types.items():
+            if key not in inventory:
+                errors.append(f"inventory missing {key}")
+            elif not isinstance(inventory[key], expected_type):
+                errors.append(f"inventory.{key} must be a {expected_type.__name__}")
+        files = inventory.get("files")
+        if isinstance(files, list):
+            required_file_keys = {
+                "path",
+                "bytes",
+                "lines",
+                "sha256",
+                "metadata",
+                "references",
+                "kind",
+                "platforms",
+                "loading",
+                "role",
+                "archive",
+                "retired_metadata",
+                "classification_basis",
+            }
+            for index, entry in enumerate(files):
+                if not isinstance(entry, dict):
+                    errors.append(f"inventory.files[{index}] must be an object")
+                    continue
+                missing = sorted(required_file_keys - entry.keys())
+                for key in missing:
+                    errors.append(f"inventory.files[{index}] missing {key}")
+                if not isinstance(entry.get("path"), str):
+                    errors.append(f"inventory.files[{index}].path must be a string")
+                if not isinstance(entry.get("references"), list):
+                    errors.append(f"inventory.files[{index}].references must be an array")
     findings = data.get("findings")
     if not isinstance(findings, list):
         errors.append("findings must be an array")
@@ -500,10 +713,17 @@ def validate_audit(data: Any) -> list[str]:
                 if key not in finding:
                     errors.append(f"findings[{index}] missing {key}")
             identifier = finding.get("id")
-            if identifier in seen:
-                errors.append(f"duplicate finding id: {identifier}")
-            if isinstance(identifier, str):
+            if not isinstance(identifier, str) or not identifier:
+                errors.append(f"findings[{index}].id must be a non-empty string")
+            else:
+                if identifier in seen:
+                    errors.append(f"duplicate finding id: {identifier}")
                 seen.add(identifier)
+            for key in ("category", "summary", "uncertainty"):
+                if not isinstance(finding.get(key), str):
+                    errors.append(f"findings[{index}].{key} must be a string")
+            if not isinstance(finding.get("locations"), list):
+                errors.append(f"findings[{index}].locations must be an array")
             if finding.get("severity") not in {"critical", "high", "medium", "low", "informational"}:
                 errors.append(f"findings[{index}] has invalid severity")
             if finding.get("evidence_type") not in {"deterministic", "model-judgment", "user-decision"}:
