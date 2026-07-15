@@ -12,6 +12,7 @@ import sys
 from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -20,6 +21,7 @@ sys.dont_write_bytecode = True
 SCHEMA_VERSION = "agent-docs-doctor.audit.v1"
 INVENTORY_VERSION = "agent-docs-doctor.inventory.v1"
 MAX_READ_BYTES = 2_000_000
+MAX_IGNORE_RULES = 10_000
 
 SECRET_NAMES = {
     ".env",
@@ -85,9 +87,7 @@ TEXT_SUFFIXES = {".md", ".mdc", ".txt", ".yaml", ".yml", ".json", ".toml"}
 ARCHIVE_PARTS = {"archive", "archived", "retired", "deprecated", "history"}
 MARKDOWN_LINK_START = re.compile(r"(?<!!)\[[^\]\n]+\]\(")
 IMPORT_LINE = re.compile(r"(?m)^\s*@([^\s#]+)\s*$")
-CODEX_FALLBACK_LIST = re.compile(
-    r"(?ms)^\s*project_doc_fallback_filenames\s*=\s*\[(.*?)\]"
-)
+CODEX_FALLBACK_LIST = re.compile(r"(?ms)^\s*project_doc_fallback_filenames\s*=\s*\[(.*?)\]")
 TOML_QUOTED_STRING = re.compile(r'"((?:\\.|[^"\\])*)"|\'([^\']*)\'')
 
 
@@ -98,6 +98,7 @@ class IgnoreRule:
     directory_only: bool
     anchored: bool
     base: PurePosixPath
+    restores_defaults: bool
 
 
 class IgnoreMatcher:
@@ -110,19 +111,40 @@ class IgnoreMatcher:
         for filename in (".gitignore", ".ignore", ".agent-docs-doctorignore"):
             path = root / filename
             if path.is_symlink():
-                self.skipped.append(
-                    {"path": filename, "reason": "ignore control symlink not followed"}
-                )
+                self.skipped.append({"path": filename, "reason": "ignore control symlink not followed"})
             elif path.is_file() and not is_secret_path(path):
-                self.rules.extend(self._parse(path, PurePosixPath(".")))
+                self.rules.extend(
+                    self._parse(
+                        path,
+                        PurePosixPath("."),
+                        PurePosixPath(filename),
+                        restores_defaults=filename == ".agent-docs-doctorignore",
+                    )
+                )
 
     @staticmethod
-    def _parse(path: Path, base: PurePosixPath) -> list[IgnoreRule]:
+    def _parse(
+        path: Path,
+        base: PurePosixPath,
+        display_path: PurePosixPath,
+        restores_defaults: bool,
+    ) -> list[IgnoreRule]:
         rules: list[IgnoreRule] = []
         try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            return rules
+            if path.stat().st_size > MAX_READ_BYTES:
+                raise ValueError(
+                    f"ignore control {display_path.as_posix()} exceeds " f"{MAX_READ_BYTES} byte read limit"
+                )
+            raw = path.read_bytes()
+            if len(raw) > MAX_READ_BYTES:
+                raise ValueError(
+                    f"ignore control {display_path.as_posix()} exceeds " f"{MAX_READ_BYTES} byte read limit"
+                )
+            lines = raw.decode("utf-8", errors="replace").splitlines()
+        except OSError as exc:
+            raise ValueError(
+                f"unable to read ignore control {display_path.as_posix()}: " f"{exc.__class__.__name__}"
+            ) from exc
         for raw in lines:
             line = raw.strip()
             if not line or line.startswith("#"):
@@ -135,7 +157,20 @@ class IgnoreMatcher:
             directory_only = line.endswith("/")
             line = line.rstrip("/")
             if line:
-                rules.append(IgnoreRule(line, negate, directory_only, anchored, base))
+                if len(rules) >= MAX_IGNORE_RULES:
+                    raise ValueError(
+                        f"ignore control {display_path.as_posix()} exceeds " f"{MAX_IGNORE_RULES} rule limit"
+                    )
+                rules.append(
+                    IgnoreRule(
+                        line,
+                        negate,
+                        directory_only,
+                        anchored,
+                        base,
+                        restores_defaults,
+                    )
+                )
         return rules
 
     def add_nested_gitignore(self, directory: Path, relative: PurePosixPath) -> None:
@@ -150,11 +185,19 @@ class IgnoreMatcher:
                 }
             )
         elif path.is_file():
-            self.rules.extend(self._parse(path, relative))
+            self.rules.extend(
+                self._parse(
+                    path,
+                    relative,
+                    PurePosixPath(relative / ".gitignore"),
+                    restores_defaults=False,
+                )
+            )
 
     def ignored(self, relative: PurePosixPath, is_dir: bool = False) -> bool:
         parts = relative.parts
-        ignored = any(part in DEFAULT_IGNORED_DIRS for part in parts)
+        default_ignored = any(part in DEFAULT_IGNORED_DIRS for part in parts)
+        ignored = default_ignored
         for rule in self.rules:
             try:
                 scoped = relative.relative_to(rule.base)
@@ -178,6 +221,8 @@ class IgnoreMatcher:
             else:
                 matched = any(fnmatch.fnmatchcase(part, rule.pattern) for part in scoped_parts)
             if matched:
+                if rule.negate and default_ignored and not rule.restores_defaults:
+                    continue
                 ignored = not rule.negate
         return ignored
 
@@ -188,6 +233,7 @@ def path_pattern_matches(path: str, pattern: str) -> bool:
     path_parts = PurePosixPath(path).parts
     pattern_parts = PurePosixPath(pattern).parts
 
+    @cache
     def match(path_index: int, pattern_index: int) -> bool:
         if pattern_index == len(pattern_parts):
             return path_index == len(path_parts)
@@ -224,10 +270,7 @@ def name_has_hint(stem: str) -> bool:
 
 
 def in_rules_tree(parts: tuple[str, ...], platform_directory: str) -> bool:
-    return any(
-        parts[index : index + 2] == (platform_directory, "rules")
-        for index in range(len(parts) - 1)
-    )
+    return any(parts[index : index + 2] == (platform_directory, "rules") for index in range(len(parts) - 1))
 
 
 def is_secret_path(path: Path | PurePosixPath) -> bool:
@@ -263,8 +306,8 @@ def codex_fallback_filenames(root: Path) -> tuple[str, ...]:
     matcher = IgnoreMatcher(root)
     if matcher.ignored(PurePosixPath(".codex/config.toml")):
         return ()
-    text, _, warning = (
-        read_text(path) if path.is_file() and not path.is_symlink() else (None, None, None)
+    text, _, _, warning = (
+        read_text(path) if path.is_file() and not path.is_symlink() else (None, None, None, None)
     )
     if text is None or warning:
         return ()
@@ -274,11 +317,7 @@ def codex_fallback_filenames(root: Path) -> tuple[str, ...]:
     names: list[str] = []
     for double_quoted, single_quoted in TOML_QUOTED_STRING.findall(match.group(1)):
         try:
-            value = (
-                json.JSONDecoder().decode(f'"{double_quoted}"')
-                if double_quoted
-                else single_quoted
-            )
+            value = json.JSONDecoder().decode(f'"{double_quoted}"') if double_quoted else single_quoted
         except json.JSONDecodeError:
             continue
         if value and Path(value).name == value and not is_secret_path(PurePosixPath(value)):
@@ -303,15 +342,11 @@ def walk_candidates(
         for dirname in sorted(dirs):
             rel = PurePosixPath((rel_current / dirname).as_posix())
             if rel in excluded_roots:
-                skipped.append(
-                    {"path": rel.as_posix(), "reason": "auditor's installed package excluded"}
-                )
+                skipped.append({"path": rel.as_posix(), "reason": "auditor's installed package excluded"})
                 continue
             if matcher.ignored(rel, is_dir=True):
                 if any(part in DEFAULT_IGNORED_DIRS for part in rel.parts):
-                    skipped.append(
-                        {"path": rel.as_posix(), "reason": "default excluded directory"}
-                    )
+                    skipped.append({"path": rel.as_posix(), "reason": "default excluded directory"})
                 continue
             kept_dirs.append(dirname)
         dirs[:] = kept_dirs
@@ -329,9 +364,7 @@ def walk_candidates(
                     symlink_candidates.append(path)
                     continue
                 if not path.is_file():
-                    skipped.append(
-                        {"path": rel.as_posix(), "reason": "non-regular filesystem entry"}
-                    )
+                    skipped.append({"path": rel.as_posix(), "reason": "non-regular filesystem entry"})
                     continue
                 candidates.append(path)
     for path in symlink_candidates:
@@ -359,26 +392,27 @@ def walk_candidates(
     return candidates, skipped
 
 
-def read_text(path: Path) -> tuple[str | None, str | None, str | None]:
+def read_text(path: Path) -> tuple[str | None, str | None, int | None, str | None]:
     try:
         size = path.stat().st_size
         if size > MAX_READ_BYTES:
-            return None, None, f"file exceeds {MAX_READ_BYTES} byte read limit"
+            return None, None, size, f"file exceeds {MAX_READ_BYTES} byte read limit"
         raw = path.read_bytes()
         if len(raw) > MAX_READ_BYTES:
-            return None, None, f"file exceeds {MAX_READ_BYTES} byte read limit"
+            return None, None, len(raw), f"file exceeds {MAX_READ_BYTES} byte read limit"
         text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
-        return text, hashlib.sha256(raw).hexdigest(), None
+        return text, hashlib.sha256(raw).hexdigest(), len(raw), None
     except OSError as exc:
-        return None, None, f"unable to read: {exc.__class__.__name__}"
+        return None, None, None, f"unable to read: {exc.__class__.__name__}"
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str | None]:
     if not text.startswith("---\n"):
         return {}, None
-    end = text.find("\n---", 4)
-    if end < 0:
+    closing = re.search(r"(?m)^---[ \t]*(?:\n|$)", text[4:])
+    if closing is None:
         return {}, "unclosed YAML frontmatter"
+    end = 4 + closing.start()
     metadata: dict[str, Any] = {}
     for number, raw in enumerate(text[4:end].splitlines(), start=2):
         if not raw.strip() or raw.lstrip().startswith("#") or raw.startswith((" ", "\t", "-")):
@@ -495,25 +529,34 @@ def mask_fenced_code(text: str) -> str:
 
 
 def markdown_link_payloads(text: str) -> Iterator[tuple[str, int]]:
-    for match in MARKDOWN_LINK_START.finditer(text):
-        index = match.end()
-        start = index
-        depth = 1
-        escaped = False
-        while index < len(text):
-            char = text[index]
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == "(":
-                depth += 1
-            elif char == ")":
-                depth -= 1
-                if depth == 0:
-                    yield text[start:index], match.start()
-                    break
-            index += 1
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        search_from = 0
+        while match := MARKDOWN_LINK_START.search(line, search_from):
+            index = match.end()
+            start = index
+            depth = 1
+            escaped = False
+            while index < len(line) and line[index] not in "\r\n":
+                char = line[index]
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        yield line[start:index], offset + match.start()
+                        search_from = index + 1
+                        break
+                index += 1
+            else:
+                break
+            if depth != 0:
+                break
+        offset += len(line)
 
 
 def markdown_destination(payload: str) -> str:
@@ -532,42 +575,58 @@ def markdown_destination(payload: str) -> str:
 
 
 def sanitized_reference_target(target: str) -> tuple[str, str | None, str]:
+    if re.match(r"^[A-Za-z]:[\\/]", target):
+        digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
+        return "<absolute-filesystem-path>", digest, "absolute-filesystem"
+    if re.match(r"^~[^/\\]*[/\\]", target) or target.startswith("\\\\"):
+        digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
+        return "<absolute-filesystem-path>", digest, "absolute-filesystem"
     if target.startswith("/"):
         digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
         return "<root-relative-path>", digest, "root-relative"
-    if target.startswith(("~/", "\\\\")) or re.match(r"^[A-Za-z]:[\\/]", target):
-        digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
-        return "<absolute-filesystem-path>", digest, "absolute-filesystem"
     return target, None, "relative"
 
 
 def local_references(text: str, relative: PurePosixPath, root: Path) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     scan_text = mask_fenced_code(text)
-    raw_matches = [
-        (markdown_destination(raw), start) for raw, start in markdown_link_payloads(scan_text)
-    ]
-    raw_matches.extend(
-        (match.group(1).strip(), match.start()) for match in IMPORT_LINE.finditer(scan_text)
-    )
+    raw_matches = [(markdown_destination(raw), start) for raw, start in markdown_link_payloads(scan_text)]
+    raw_matches.extend((match.group(1).strip(), match.start()) for match in IMPORT_LINE.finditer(scan_text))
     for raw, start in sorted(raw_matches, key=lambda item: item[1]):
         target = raw.split("#", 1)[0]
-        if not target or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE) or target.startswith("#"):
+        if not target or target.startswith("#"):
             continue
         display_target, target_sha256, target_kind = sanitized_reference_target(target)
+        if target_kind == "relative" and re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE):
+            continue
         if target_kind == "absolute-filesystem":
             inside = False
             exists = None
         else:
-            candidate = (root / target.lstrip("/")).resolve() if target.startswith("/") else (
-                root / relative.parent / target
-            ).resolve()
             try:
-                candidate.relative_to(root.resolve())
-                inside = True
-            except ValueError:
+                candidate = (
+                    (root / target.lstrip("/")).resolve()
+                    if target.startswith("/")
+                    else (root / relative.parent / target).resolve()
+                )
+            except (OSError, ValueError):
                 inside = False
-            exists = candidate.exists() if inside else None
+                exists = None
+                display_target = "<invalid-filesystem-path>"
+                target_sha256 = hashlib.sha256(target.encode("utf-8")).hexdigest()
+                target_kind = "invalid-filesystem"
+            else:
+                try:
+                    candidate.relative_to(root.resolve())
+                except (OSError, ValueError):
+                    inside = False
+                    exists = None
+                else:
+                    inside = True
+                    try:
+                        exists = candidate.exists()
+                    except (OSError, ValueError):
+                        exists = None
         reference = {
             "target": display_target,
             "target_kind": target_kind,
@@ -615,9 +674,12 @@ def build_inventory(root_value: str | Path) -> dict[str, Any]:
     paths, skipped = walk_candidates(root, fallback_names, frozenset(excluded_roots))
     selected_codex: set[str] = set()
     by_directory: dict[PurePosixPath, dict[str, Path]] = defaultdict(dict)
+    read_results: dict[Path, tuple[str | None, str | None, int | None, str | None]] = {}
     for path in paths:
         relative = PurePosixPath(path.relative_to(root).as_posix())
-        if path.stat().st_size > 0:
+        result = read_text(path)
+        read_results[path] = result
+        if result[2] is not None and result[2] > 0:
             by_directory[relative.parent][relative.name] = path
     for directory, names in by_directory.items():
         for candidate_name in ("AGENTS.override.md", "AGENTS.md", *fallback_sequence):
@@ -631,8 +693,7 @@ def build_inventory(root_value: str | Path) -> dict[str, Any]:
     all_blocks: list[dict[str, Any]] = []
     for path in paths:
         relative = PurePosixPath(path.relative_to(root).as_posix())
-        stat = path.stat()
-        text, digest, warning = read_text(path)
+        text, digest, byte_count, warning = read_results[path]
         if warning:
             warnings.append({"path": relative.as_posix(), "message": warning})
         metadata: dict[str, Any] = {}
@@ -648,7 +709,7 @@ def build_inventory(root_value: str | Path) -> dict[str, Any]:
             warnings.append({"path": relative.as_posix(), "message": metadata_error})
         entry = {
             "path": relative.as_posix(),
-            "bytes": stat.st_size,
+            "bytes": byte_count,
             "lines": lines,
             "sha256": digest,
             "metadata": metadata,
@@ -731,9 +792,7 @@ def deterministic_findings(inventory: dict[str, Any]) -> list[dict[str, Any]]:
                         "evidence_type": "deterministic",
                         "category": "broken-reference",
                         "summary": "A local Markdown reference does not resolve.",
-                        "locations": [
-                            {"path": item["path"], "line": ref["line"], "column": ref["column"]}
-                        ],
+                        "locations": [{"path": item["path"], "line": ref["line"], "column": ref["column"]}],
                         "evidence": {"target": ref["target"]},
                         "uncertainty": "Generated-at-runtime targets may be intentionally absent.",
                     }
@@ -759,6 +818,8 @@ def build_audit(root_value: str | Path) -> dict[str, Any]:
             "confirms loading.",
             "Semantic contradiction, staleness, and operational necessity require judgment.",
             "Ignored, secret-like, unreadable, and over-limit files are not inspected.",
+            "Concurrent repository mutation can produce a mixed snapshot; rerun against a stable "
+            "checkout when the evidence is material.",
             "Default-pruned directories are listed in inventory.skipped; restore a needed default "
             "with an explicit negation in .agent-docs-doctorignore.",
         ],

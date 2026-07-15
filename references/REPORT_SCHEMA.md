@@ -47,7 +47,10 @@ finding IDs remain unique when a line contains repeated links. Absolute-style Ma
 targets are replaced with typed placeholders and one-way hashes so a shareable ledger does not
 reproduce local filesystem paths. References inside Markdown fenced code are not treated as links.
 
-An installed auditor package nested inside the target is listed in `skipped` and excluded from the inventory; other installed skills remain auditable. Default-pruned directories are also listed in `skipped`; add an explicit negation such as `!fixtures/` to `.agent-docs-doctorignore` when one belongs in scope. Symlinked ignore-control files are not followed and are reported as a limitation. An ignored `.codex/config.toml` is not opened or used for fallback discovery. Non-regular candidates such as named pipes and dangling symlinks are not opened and receive distinct skip reasons.
+An installed auditor package nested inside the target is listed in `skipped` and excluded from the inventory; other installed skills remain auditable. Default-pruned directories are also listed in `skipped`; only `.agent-docs-doctorignore` can restore one with an explicit negation such as `!fixtures/`. Symlinked ignore-control files are not followed and are reported as a limitation. Ignore controls above 2 MB or 10,000 active rules stop the audit before the repository walk. An ignored `.codex/config.toml` is not opened or used for fallback discovery. Non-regular candidates such as named pipes and dangling symlinks are not opened and receive distinct skip reasons.
+
+The inventory is deterministic for a stable filesystem snapshot. Concurrent mutation can produce
+read warnings or a mixed snapshot; rerun against a stable checkout when the evidence is material.
 
 Validate it with `scripts/validate_report.py`. Both that entry point and `agent_docs_doctor.py
 validate-report` exit `0` for valid output or help, `1` for a well-formed report rejected by the
