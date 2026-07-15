@@ -301,6 +301,20 @@ class DoctorLibTests(unittest.TestCase):
         ]
         self.assertIn("findings[0] has invalid severity", validate_audit(report))
 
+    def test_standalone_validator_help_flags(self) -> None:
+        for flag in ("-h", "--help"):
+            with self.subTest(flag=flag):
+                completed = subprocess.run(
+                    [sys.executable, str(SCRIPTS / "validate_report.py"), flag],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn("usage: validate_report.py <report.json|->", completed.stdout)
+                self.assertIn("standard input", completed.stdout)
+                self.assertEqual(completed.stderr, "")
+
     def test_validator_rejects_incomplete_inventory_and_unhashable_id(self) -> None:
         incomplete = {
             "schema_version": "agent-docs-doctor.audit.v1",

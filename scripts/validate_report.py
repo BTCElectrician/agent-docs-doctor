@@ -11,11 +11,19 @@ sys.dont_write_bytecode = True
 
 from doctorlib import validate_audit  # noqa: E402
 
+USAGE = "usage: validate_report.py <report.json|->"
+
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
+    if args in (["-h"], ["--help"]):
+        print(USAGE)
+        print()
+        print("Validate an Agent Docs Doctor audit JSON report.")
+        print("Use - to read the report from standard input.")
+        return 0
     if len(args) != 1:
-        print("usage: validate_report.py <report.json|->", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     try:
         raw = sys.stdin.read() if args[0] == "-" else Path(args[0]).read_text(encoding="utf-8")
