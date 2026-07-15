@@ -40,20 +40,22 @@ Python 3.10 or newer is required for the deterministic scripts. There are no run
 For Codex and consumers that support the shared project skill directory:
 
 ```bash
-git clone <repository-url> .agents/skills/agent-docs-doctor
+git clone https://github.com/BTCElectrician/agent-docs-doctor.git \
+  .agents/skills/agent-docs-doctor
 ```
 
 For Claude Code, place the same folder at `.claude/skills/agent-docs-doctor`. Cursor also discovers compatible shared and platform-specific skill locations; `.agents/skills/agent-docs-doctor` is the simplest cross-client project location.
 
-Until this repository has an approved public remote, copy the local folder into the appropriate project skill directory. The project is not yet published.
-
 ## Quick start
 
-Invoke the skill:
+Ask the agent client to use the installed Agent Docs Doctor skill:
 
 ```text
-Use $agent-docs-doctor to audit this repository's agent instructions and tell me what should change.
+Audit this repository's agent instructions with Agent Docs Doctor and tell me what should change.
 ```
+
+Named-skill syntax varies by client; use the client's normal skill invocation when explicit
+selection is needed.
 
 Or run and validate the evidence engine directly. Use a unique temporary file for a ledger you
 want to inspect:
@@ -65,10 +67,20 @@ python3 -B .agents/skills/agent-docs-doctor/scripts/validate_report.py "$audit_r
 rm -f "$audit_report"
 ```
 
-In PowerShell, use `$auditReport = [System.IO.Path]::GetTempFileName()` and remove it with
-`Remove-Item $auditReport` after validation. When developing this repository itself, shorten the
-script paths to `scripts/...`. The entry points disable bytecode writes, and `-B` adds an explicit
-interpreter-level guard. The scripts write only to standard output unless your shell redirects it.
+In PowerShell 7 or newer, capture output with `Set-Content -Encoding utf8`; legacy Windows
+PowerShell 5.1 redirection may emit UTF-16LE, which is not valid input for this validator:
+
+```powershell
+$auditReport = [System.IO.Path]::GetTempFileName()
+$auditJson = python3 -B .agents/skills/agent-docs-doctor/scripts/agent_docs_doctor.py audit . --pretty
+$auditJson | Set-Content -Path $auditReport -Encoding utf8
+python3 -B .agents/skills/agent-docs-doctor/scripts/validate_report.py $auditReport
+Remove-Item $auditReport
+```
+
+When developing this repository itself, shorten the script paths to `scripts/...`. The entry
+points disable bytecode writes, and `-B` adds an explicit interpreter-level guard. The scripts
+write only to standard output unless your shell redirects it.
 
 ## Example inventory
 
@@ -114,7 +126,8 @@ The default audit:
 - walks only the requested root;
 - honors a documented subset of root and nested `.gitignore` files plus root `.ignore` and `.agent-docs-doctorignore`, including slash-aware `*`, `?`, `**`, negation, and the rule that a file cannot be re-included while its parent directory remains excluded;
 - does not follow symlinked ignore-control files and records that limitation in `skipped`;
-- prunes `.git`, `.hg`, `.svn`, `node_modules`, `.venv`, `venv`, `dist`, `build`, `.next`, `coverage`, `fixtures`, `.fixtures`, `testdata`, and `__pycache__` by default, recording each pruned directory in `skipped`; an explicit rule such as `!fixtures/` in `.agent-docs-doctorignore` restores a needed default;
+- prunes `.git`, `.hg`, `.svn`, `node_modules`, `.venv`, `venv`, `dist`, `build`, `.next`, `coverage`, `fixtures`, `.fixtures`, `testdata`, and `__pycache__` by default, recording each pruned directory in `skipped`; only an explicit rule such as `!fixtures/` in `.agent-docs-doctorignore` restores a needed default;
+- fails closed before walking when an ignore-control file exceeds the 2 MB read limit or 10,000 active rules;
 - skips secret- or credential-like filenames;
 - follows only in-root symlinks whose targets are auditable, non-ignored, non-secret-like regular files;
 - excludes its own installed package from a parent-repository audit while continuing to inventory other installed skills;
@@ -135,6 +148,9 @@ See [the full evaluation protocol](references/EVALUATION_PROTOCOL.md) and [forwa
 
 - The ignore matcher intentionally implements a useful subset of Git ignore semantics, not every escaping or repository-boundary edge case in Git's specification.
 - Frontmatter parsing is conservative and dependency-free; complex nested YAML remains raw evidence for model review.
+- The local-link parser handles ordinary single-line Markdown destinations; malformed or multiline inline-link constructs remain model-review evidence.
+- A repository changed concurrently with an audit can produce warnings or a mixed snapshot; rerun
+  against a stable checkout when evidence will support a consequential decision.
 - Filename-based consumer and role classifications are labeled inference.
 - Exact overlap is deterministic; semantic equivalence and contradiction are not.
 - The tool does not inspect global user/team rules outside the requested repository.
@@ -146,8 +162,10 @@ See [the full evaluation protocol](references/EVALUATION_PROTOCOL.md) and [forwa
 ```bash
 python3 -B -m unittest discover -s tests -v
 python3 -B scripts/check_python_syntax.py scripts tests
-python3 -B /path/to/skill-creator/scripts/quick_validate.py .
 ```
+
+Release maintainers also run the skill validator bundled with their current client. That optional
+validator is not a source dependency and its installation path is client-managed.
 
 Validator exits are stable across both entry points: `0` means valid output or help, `1` means a
 well-formed report failed schema validation, and `2` means usage, file I/O, or JSON parsing failed.
@@ -158,6 +176,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing discovery rules or repor
 
 ## Maturity and license
 
-Status: **local pre-release**. The deterministic core and synthetic fixture suite are implemented; broader public-repository evaluation and multi-version client verification remain release gates.
+Status: **release candidate**. The deterministic core and synthetic fixture suite are implemented;
+the public repository is created only after the recorded release and behavioral gates pass.
 
 Licensed under [Apache License 2.0](LICENSE).

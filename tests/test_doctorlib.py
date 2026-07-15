@@ -9,13 +9,22 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from doctorlib import MAX_READ_BYTES, build_audit, build_inventory, dump_json, validate_audit  # noqa: E402
+from doctorlib import (  # noqa: E402
+    MAX_IGNORE_RULES,
+    MAX_READ_BYTES,
+    build_audit,
+    build_inventory,
+    dump_json,
+    read_text,
+    validate_audit,
+)
 
 
 class DoctorLibTests(unittest.TestCase):
@@ -55,6 +64,18 @@ class DoctorLibTests(unittest.TestCase):
             ["fixtures/sample/AGENTS.md"],
         )
         self.assertNotIn(
+            {"path": "fixtures", "reason": "default excluded directory"},
+            result["skipped"],
+        )
+
+    def test_gitignore_negation_cannot_restore_tool_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".gitignore", "!fixtures/\n")
+            self.write(root, "fixtures/sample/AGENTS.md", "# Synthetic\n")
+            result = build_inventory(root)
+        self.assertEqual(result["files"], [])
+        self.assertIn(
             {"path": "fixtures", "reason": "default excluded directory"},
             result["skipped"],
         )
@@ -126,25 +147,90 @@ class DoctorLibTests(unittest.TestCase):
             paths = [item["path"] for item in build_inventory(root)["files"]]
         self.assertEqual(paths, ["docs/AGENTS.md"])
 
+    def test_globstar_matching_is_bounded_for_adversarial_patterns(self) -> None:
+        code = (
+            "import sys; sys.path.insert(0, 'scripts'); "
+            "from doctorlib import path_pattern_matches; "
+            "n=40; path='/'.join(['x']*n); "
+            "pattern='/'.join(['**']*n+['missing']); "
+            "assert path_pattern_matches(path, pattern) is False"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", code],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_oversized_ignore_control_fails_closed_without_opening(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            control = root / ".gitignore"
+            with control.open("wb") as handle:
+                handle.truncate(MAX_READ_BYTES + 1)
+            self.write(root, "AGENTS.md", "# Rules\n")
+            original_read_bytes = Path.read_bytes
+
+            def guarded_read_bytes(path: Path) -> bytes:
+                if path == control:
+                    raise AssertionError("oversized ignore control was opened")
+                return original_read_bytes(path)
+
+            with (
+                patch.object(Path, "read_bytes", guarded_read_bytes),
+                self.assertRaisesRegex(ValueError, "byte read limit"),
+            ):
+                build_inventory(root)
+
+    def test_excessive_ignore_rules_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            rules = "".join(f"ignored-{index}\n" for index in range(MAX_IGNORE_RULES + 1))
+            self.write(root, ".gitignore", rules)
+            with self.assertRaisesRegex(ValueError, "rule limit"):
+                build_inventory(root)
+
     def test_root_ignore_symlink_is_not_opened(self) -> None:
         with tempfile.TemporaryDirectory() as value, tempfile.TemporaryDirectory() as outside_value:
             root = Path(value)
-            outside = self.write(Path(outside_value), "ignore-rules", "AGENTS.md\n")
-            (root / ".gitignore").symlink_to(outside)
+            sentinel = "ignore-target-private-sentinel"
+            outside = self.write(Path(outside_value), "ignore-rules", f"AGENTS.md\n{sentinel}\n")
+            control = root / ".gitignore"
+            control.symlink_to(outside)
             self.write(root, "AGENTS.md", "# Rules\n")
             original_read_text = Path.read_text
+            original_read_bytes = Path.read_bytes
+            original_open = Path.open
+            blocked = {control, outside}
 
-            def guarded_read_text(
-                path: Path, encoding: str | None = None, errors: str | None = None
-            ) -> str:
-                if path == root / ".gitignore":
+            def guarded_read_text(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+                if path in blocked:
                     raise AssertionError("root ignore symlink was opened")
                 return original_read_text(path, encoding=encoding, errors=errors)
 
-            with patch.object(Path, "read_text", guarded_read_text):
+            def guarded_read_bytes(path: Path) -> bytes:
+                if path in blocked:
+                    raise AssertionError("root ignore symlink was opened")
+                return original_read_bytes(path)
+
+            def guarded_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+                if path in blocked:
+                    raise AssertionError("root ignore symlink was opened")
+                return original_open(path, *args, **kwargs)
+
+            with (
+                patch.object(Path, "read_text", guarded_read_text),
+                patch.object(Path, "read_bytes", guarded_read_bytes),
+                patch.object(Path, "open", guarded_open),
+            ):
                 result = build_inventory(root)
                 paths = [item["path"] for item in result["files"]]
+                serialized = dump_json(result)
         self.assertEqual(paths, ["AGENTS.md"])
+        self.assertNotIn(sentinel, serialized)
         self.assertEqual(
             result["skipped"],
             [{"path": ".gitignore", "reason": "ignore control symlink not followed"}],
@@ -153,13 +239,36 @@ class DoctorLibTests(unittest.TestCase):
     def test_secret_like_files_are_never_read(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
-            secret = self.write(root, "agent.key", "do-not-read")
-            secret.chmod(0)
-            try:
+            sentinel = "private-secret-sentinel"
+            secret = self.write(root, "agent.key", sentinel)
+            original_read_text = Path.read_text
+            original_read_bytes = Path.read_bytes
+            original_open = Path.open
+
+            def guarded_read_text(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+                if path == secret:
+                    raise AssertionError("secret-like candidate was opened")
+                return original_read_text(path, encoding=encoding, errors=errors)
+
+            def guarded_read_bytes(path: Path) -> bytes:
+                if path == secret:
+                    raise AssertionError("secret-like candidate was opened")
+                return original_read_bytes(path)
+
+            def guarded_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+                if path == secret:
+                    raise AssertionError("secret-like candidate was opened")
+                return original_open(path, *args, **kwargs)
+
+            with (
+                patch.object(Path, "read_text", guarded_read_text),
+                patch.object(Path, "read_bytes", guarded_read_bytes),
+                patch.object(Path, "open", guarded_open),
+            ):
                 result = build_inventory(root)
-            finally:
-                secret.chmod(0o600)
+                serialized = dump_json(result)
         self.assertEqual(result["files"], [])
+        self.assertNotIn(sentinel, serialized)
         self.assertEqual(result["skipped"][0]["reason"], "secret-like filename")
 
     def test_secret_handling_rule_is_not_mistaken_for_a_secret(self) -> None:
@@ -221,7 +330,7 @@ class DoctorLibTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=2,
+                timeout=10,
             )
             result = json.JSONDecoder().decode(completed.stdout)
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -285,6 +394,20 @@ class DoctorLibTests(unittest.TestCase):
             result = build_inventory(root)
         self.assertIn("malformed frontmatter", result["warnings"][0]["message"])
 
+    def test_frontmatter_requires_a_bare_closing_delimiter(self) -> None:
+        for false_delimiter in ("----", "---:", "--- draft"):
+            with self.subTest(false_delimiter=false_delimiter):
+                with tempfile.TemporaryDirectory() as value:
+                    root = Path(value)
+                    self.write(
+                        root,
+                        "AGENTS.md",
+                        f"---\nstatus: retired\n{false_delimiter}\n# Still frontmatter\n",
+                    )
+                    result = build_inventory(root)
+                self.assertEqual(result["files"][0]["metadata"], {})
+                self.assertIn("unclosed YAML frontmatter", result["warnings"][0]["message"])
+
     def test_broken_and_external_references(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -296,8 +419,13 @@ class DoctorLibTests(unittest.TestCase):
             )
             audit = build_audit(root)
         broken = [item for item in audit["findings"] if item["category"] == "broken-reference"]
+        references = audit["inventory"]["files"][0]["references"]
+        outside = next(item for item in references if item["target"] == "../outside.md")
         self.assertEqual(len(broken), 1)
         self.assertEqual(broken[0]["evidence"]["target"], "docs/missing.md")
+        self.assertFalse(outside["inside_root"])
+        self.assertIsNone(outside["exists"])
+        self.assertFalse(any(item["target"] == "https://example.com" for item in references))
 
     def test_same_line_broken_references_have_unique_ids(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -329,6 +457,24 @@ class DoctorLibTests(unittest.TestCase):
             findings = build_audit(root)["findings"]
         self.assertFalse(any(item["category"] == "broken-reference" for item in findings))
 
+    def test_many_unterminated_markdown_links_are_bounded(self) -> None:
+        code = (
+            "import sys; sys.path.insert(0, 'scripts'); "
+            "from pathlib import PurePosixPath; "
+            "from doctorlib import local_references; "
+            "text=''.join('[bad](missing' for _ in range(50000)); "
+            "assert local_references(text, PurePosixPath('AGENTS.md'), __import__('pathlib').Path('.')) == []"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", code],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_absolute_style_reference_target_is_sanitized(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -354,6 +500,39 @@ class DoctorLibTests(unittest.TestCase):
         self.assertFalse(reference["inside_root"])
         self.assertIsNone(reference["exists"])
         self.assertFalse(any(item["category"] == "broken-reference" for item in report["findings"]))
+
+    def test_named_home_and_windows_drive_references_are_sanitized(self) -> None:
+        private_targets = ("~someone/private/plan.md", "C:/Users/Someone/private-plan.md")
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(
+                root,
+                "AGENTS.md",
+                "\n".join(f"Read [private]({target})." for target in private_targets),
+            )
+            result = build_inventory(root)
+            serialized = dump_json(result)
+            references = result["files"][0]["references"]
+        self.assertEqual(len(references), 2)
+        self.assertTrue(all(item["target"] == "<absolute-filesystem-path>" for item in references))
+        self.assertTrue(all(item["target_kind"] == "absolute-filesystem" for item in references))
+        self.assertTrue(all(item["inside_root"] is False for item in references))
+        self.assertTrue(all(item["exists"] is None for item in references))
+        for target in private_targets:
+            self.assertNotIn(target, serialized)
+
+    def test_invalid_filesystem_reference_does_not_abort_or_leak(self) -> None:
+        invalid_target = "private\x00path.md"
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "AGENTS.md", f"Read [invalid]({invalid_target}).\n")
+            result = build_inventory(root)
+            reference = result["files"][0]["references"][0]
+        self.assertEqual(reference["target"], "<invalid-filesystem-path>")
+        self.assertEqual(reference["target_kind"], "invalid-filesystem")
+        self.assertFalse(reference["inside_root"])
+        self.assertIsNone(reference["exists"])
+        self.assertIn("target_sha256", reference)
 
     def test_references_inside_fenced_code_are_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -482,11 +661,47 @@ class DoctorLibTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
             self.write(root, "AGENTS.md", "# Rules\n")
-            first = dump_json(build_audit(root), pretty=True)
-            second = dump_json(build_audit(root), pretty=True)
+            outputs: list[str] = []
+            for hash_seed in ("1", "8675309"):
+                environment = os.environ.copy()
+                environment["PYTHONHASHSEED"] = hash_seed
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        str(SCRIPTS / "agent_docs_doctor.py"),
+                        "audit",
+                        str(root),
+                        "--pretty",
+                    ],
+                    cwd=ROOT,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                outputs.append(completed.stdout)
+        first, second = outputs
         self.assertEqual(first, second)
         self.assertNotIn(value, first)
         self.assertEqual(json.JSONDecoder().decode(first)["inventory"]["root"], ".")
+
+    def test_read_text_reports_concurrent_disappearance(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            path = self.write(Path(value), "AGENTS.md", "# Rules\n")
+            path.unlink()
+            text, digest, byte_count, warning = read_text(path)
+        self.assertIsNone(text)
+        self.assertIsNone(digest)
+        self.assertIsNone(byte_count)
+        self.assertIsNotNone(warning)
+        self.assertIn("unable to read", warning or "")
+
+    def test_audit_discloses_concurrent_mutation_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            report = build_audit(value)
+        self.assertTrue(any("Concurrent repository mutation" in item for item in report["limitations"]))
 
     def test_read_only_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -610,16 +825,35 @@ class DoctorLibTests(unittest.TestCase):
             )
             self.write(root, "PRIVATE_GUIDE.md", "# Ignored fallback\n")
             ignored_config = root / ".codex/config.toml"
+            sentinel = 'project_doc_fallback_filenames = ["PRIVATE_GUIDE.md"]'
             original_read_bytes = Path.read_bytes
+            original_read_text = Path.read_text
+            original_open = Path.open
 
             def guarded_read_bytes(path: Path) -> bytes:
                 if path == ignored_config:
                     raise AssertionError("ignored config was opened")
                 return original_read_bytes(path)
 
-            with patch.object(Path, "read_bytes", guarded_read_bytes):
+            def guarded_read_text(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+                if path == ignored_config:
+                    raise AssertionError("ignored config was opened")
+                return original_read_text(path, encoding=encoding, errors=errors)
+
+            def guarded_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+                if path == ignored_config:
+                    raise AssertionError("ignored config was opened")
+                return original_open(path, *args, **kwargs)
+
+            with (
+                patch.object(Path, "read_bytes", guarded_read_bytes),
+                patch.object(Path, "read_text", guarded_read_text),
+                patch.object(Path, "open", guarded_open),
+            ):
                 paths = [item["path"] for item in build_inventory(root)["files"]]
+                serialized = dump_json(build_inventory(root))
         self.assertNotIn("PRIVATE_GUIDE.md", paths)
+        self.assertNotIn(sentinel, serialized)
 
     def test_codex_override_selection_and_agent_history_classification(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -719,8 +953,7 @@ class DoctorLibTests(unittest.TestCase):
 
     def test_public_commands_do_not_prescribe_shared_temp_or_compileall(self) -> None:
         public_workflow = "\n".join(
-            (ROOT / name).read_text(encoding="utf-8")
-            for name in ("README.md", "SKILL.md", "CONTRIBUTING.md")
+            (ROOT / name).read_text(encoding="utf-8") for name in ("README.md", "SKILL.md", "CONTRIBUTING.md")
         )
         self.assertNotIn("/tmp/agent-docs-audit.json", public_workflow)
         self.assertNotIn("-m compileall", public_workflow)

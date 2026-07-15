@@ -36,7 +36,11 @@ If the skill is installed outside the target repository, resolve `scripts/` rela
 Use the shell's unique-temporary-file facility on non-POSIX systems and delete the temporary ledger
 after the report is complete.
 
-Review skipped files, warnings, discovered surfaces, exact-overlap groups, local references, archive classification, and deterministic findings. The ledger omits overlap paragraph bodies and sanitizes absolute-style reference targets. Default-pruned directories are reported in `skipped`; restore a needed default with an explicit negation such as `!fixtures/` in `.agent-docs-doctorignore`. A skipped or unreadable file is an audit limitation, not proof that it is irrelevant.
+Review skipped files, warnings, discovered surfaces, exact-overlap groups, local references, archive classification, and deterministic findings. The ledger omits overlap paragraph bodies and sanitizes absolute-style reference targets. Default-pruned directories are reported in `skipped`; only `.agent-docs-doctorignore` can restore one with an explicit negation such as `!fixtures/`. Oversized ignore controls fail closed before the walk. A skipped or unreadable file is an audit limitation, not proof that it is irrelevant.
+
+Treat a repository that changes during collection as a potentially mixed snapshot. If warnings or
+external evidence suggest concurrent mutation, rerun against a stable checkout before relying on
+the ledger for a consequential decision.
 
 When run from an installation inside the target repository, the engine reports and excludes its own package directory so the tool does not create evidence about itself. Other installed skills remain in scope.
 
