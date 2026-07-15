@@ -41,8 +41,15 @@ Produce a concise Markdown report backed by the deterministic JSON ledger.
 - a semantic `judgment_queue`;
 - explicit `limitations`.
 
-Exact-overlap occurrences contain hashes plus path and line evidence, not copied paragraph bodies. Absolute-style Markdown and import targets are replaced with typed placeholders and one-way hashes so a shareable ledger does not reproduce local filesystem paths.
+Exact-overlap occurrences contain hashes plus path and line evidence, not copied paragraph bodies.
+File `sha256` values cover raw bytes. Reference evidence includes path, line, and column so stable
+finding IDs remain unique when a line contains repeated links. Absolute-style Markdown and import
+targets are replaced with typed placeholders and one-way hashes so a shareable ledger does not
+reproduce local filesystem paths. References inside Markdown fenced code are not treated as links.
 
-An installed auditor package nested inside the target is listed in `skipped` and excluded from the inventory; other installed skills remain auditable. An ignored `.codex/config.toml` is not opened or used for fallback discovery.
+An installed auditor package nested inside the target is listed in `skipped` and excluded from the inventory; other installed skills remain auditable. Default-pruned directories are also listed in `skipped`; add an explicit negation such as `!fixtures/` to `.agent-docs-doctorignore` when one belongs in scope. Symlinked ignore-control files are not followed and are reported as a limitation. An ignored `.codex/config.toml` is not opened or used for fallback discovery. Non-regular candidates such as named pipes and dangling symlinks are not opened and receive distinct skip reasons.
 
-Validate it with `scripts/validate_report.py`. The JSON is evidence input, not a complete semantic audit.
+Validate it with `scripts/validate_report.py`. Both that entry point and `agent_docs_doctor.py
+validate-report` exit `0` for valid output or help, `1` for a well-formed report rejected by the
+schema, and `2` for usage, file I/O, or JSON parsing errors. The JSON is evidence input, not a
+complete semantic audit.
