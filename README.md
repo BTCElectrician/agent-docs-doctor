@@ -25,7 +25,7 @@ The skill is the reasoning workflow. The zero-dependency Python scripts are the 
 
 | Consumer | Recognized surfaces | Important caveat |
 |---|---|---|
-| OpenAI Codex | `AGENTS.md`, `AGENTS.override.md`, configured-looking surfaces, `.agents/skills/**/SKILL.md` | one instruction file is selected per directory; fallbacks are alternatives |
+| OpenAI Codex | `AGENTS.md`, `AGENTS.override.md`, configured fallback surfaces, `.agents/skills/**/SKILL.md` | one instruction file is selected per directory; trusted-project config may add fallbacks |
 | Claude Code | `CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/**/*.md`, compatible skills | imports organize ownership but still consume context |
 | Cursor | nested `AGENTS.md`, `.cursor/rules/*.mdc`, compatible skills | plain `.md` in `.cursor/rules` is not an MDC project rule |
 | Agent Skills consumers | any discovered `SKILL.md` | consumer extensions are not automatically portable |
@@ -55,14 +55,20 @@ Invoke the skill:
 Use $agent-docs-doctor to audit this repository's agent instructions and tell me what should change.
 ```
 
-Or run the evidence engine directly:
+Or run and validate the evidence engine directly. Use a unique temporary file for a ledger you
+want to inspect:
 
 ```bash
-python3 -B .agents/skills/agent-docs-doctor/scripts/agent_docs_doctor.py audit . --pretty > /tmp/agent-docs-audit.json
-python3 -B .agents/skills/agent-docs-doctor/scripts/validate_report.py /tmp/agent-docs-audit.json
+audit_report="$(mktemp)"
+python3 -B .agents/skills/agent-docs-doctor/scripts/agent_docs_doctor.py audit . --pretty > "$audit_report"
+python3 -B .agents/skills/agent-docs-doctor/scripts/validate_report.py "$audit_report"
+rm -f "$audit_report"
 ```
 
-When developing this repository itself, shorten the script paths to `scripts/...`. The entry points disable bytecode writes, and `-B` adds an explicit interpreter-level guard. The scripts write only to standard output unless your shell redirects it.
+In PowerShell, use `$auditReport = [System.IO.Path]::GetTempFileName()` and remove it with
+`Remove-Item $auditReport` after validation. When developing this repository itself, shorten the
+script paths to `scripts/...`. The entry points disable bytecode writes, and `-B` adds an explicit
+interpreter-level guard. The scripts write only to standard output unless your shell redirects it.
 
 ## Example inventory
 
@@ -106,12 +112,14 @@ That tree is a proposal, not a universal standard. A real audit includes an incu
 The default audit:
 
 - walks only the requested root;
-- honors root and nested `.gitignore` files plus root `.ignore` and `.agent-docs-doctorignore`, including the rule that a file cannot be re-included while its parent directory remains excluded;
+- honors a documented subset of root and nested `.gitignore` files plus root `.ignore` and `.agent-docs-doctorignore`, including slash-aware `*`, `?`, `**`, negation, and the rule that a file cannot be re-included while its parent directory remains excluded;
+- does not follow symlinked ignore-control files and records that limitation in `skipped`;
+- prunes `.git`, `.hg`, `.svn`, `node_modules`, `.venv`, `venv`, `dist`, `build`, `.next`, `coverage`, `fixtures`, `.fixtures`, `testdata`, and `__pycache__` by default, recording each pruned directory in `skipped`; an explicit rule such as `!fixtures/` in `.agent-docs-doctorignore` restores a needed default;
 - skips secret- or credential-like filenames;
 - follows only in-root symlinks whose targets are auditable, non-ignored, non-secret-like regular files;
 - excludes its own installed package from a parent-repository audit while continuing to inventory other installed skills;
 - refuses to read candidate files above a fixed safety limit while reporting the limitation;
-- emits relative paths and no timestamps, making output reproducible and less likely to leak local paths;
+- emits relative paths, raw-byte file hashes, and no timestamps, making output reproducible and less likely to leak local paths;
 - omits duplicated paragraph bodies and sanitizes absolute-style reference targets in JSON evidence;
 - never writes into the target repository.
 
@@ -125,7 +133,7 @@ See [the full evaluation protocol](references/EVALUATION_PROTOCOL.md) and [forwa
 
 ## Limitations
 
-- The ignore matcher intentionally implements a useful subset of Git ignore semantics, not every edge case in Git's specification.
+- The ignore matcher intentionally implements a useful subset of Git ignore semantics, not every escaping or repository-boundary edge case in Git's specification.
 - Frontmatter parsing is conservative and dependency-free; complex nested YAML remains raw evidence for model review.
 - Filename-based consumer and role classifications are labeled inference.
 - Exact overlap is deterministic; semantic equivalence and contradiction are not.
@@ -137,9 +145,12 @@ See [the full evaluation protocol](references/EVALUATION_PROTOCOL.md) and [forwa
 
 ```bash
 python3 -B -m unittest discover -s tests -v
-python3 -B -m compileall -q scripts tests
+python3 -B scripts/check_python_syntax.py scripts tests
 python3 -B /path/to/skill-creator/scripts/quick_validate.py .
 ```
+
+Validator exits are stable across both entry points: `0` means valid output or help, `1` means a
+well-formed report failed schema validation, and `2` means usage, file I/O, or JSON parsing failed.
 
 Synthetic fixtures cover healthy, bloated, conflicting, stale, competing-state, thin-adapter, intentionally duplicated, and lightweight non-code repositories. They contain no private source documents.
 

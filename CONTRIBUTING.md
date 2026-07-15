@@ -16,7 +16,7 @@ Agent Docs Doctor is intentionally conservative: deterministic code reports obse
 
 ```bash
 python3 -B -m unittest discover -s tests -v
-python3 -B -m compileall -q scripts tests
+python3 -B scripts/check_python_syntax.py scripts tests
 python3 -B scripts/agent_docs_doctor.py audit fixtures/healthy-repo --pretty
 ```
 

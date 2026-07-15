@@ -4,4 +4,4 @@ status: retired
 
 # Retired migration plan
 
-This plan was superseded but remains outside the archive as a misleading authority surface.
+This plan was superseded after the migration completed.

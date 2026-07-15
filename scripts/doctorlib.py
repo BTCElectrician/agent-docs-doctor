@@ -64,11 +64,22 @@ EXACT_NAMES = {
     "agent_surface_rules.yml",
 }
 
-NAME_HINT = re.compile(
-    r"(?:agent|instruction|rule|status|handoff|work[-_ ]?queue|startup|context|"
-    r"manifest|governance|authority|current[-_ ]?state|model[-_ ]?configs?|plan)",
-    re.IGNORECASE,
-)
+NAME_HINT_TOKENS = {
+    "agent",
+    "agents",
+    "authority",
+    "context",
+    "governance",
+    "handoff",
+    "instruction",
+    "instructions",
+    "manifest",
+    "plan",
+    "rule",
+    "rules",
+    "startup",
+    "status",
+}
 
 TEXT_SUFFIXES = {".md", ".mdc", ".txt", ".yaml", ".yml", ".json", ".toml"}
 ARCHIVE_PARTS = {"archive", "archived", "retired", "deprecated", "history"}
@@ -95,9 +106,14 @@ class IgnoreMatcher:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.rules: list[IgnoreRule] = []
+        self.skipped: list[dict[str, str]] = []
         for filename in (".gitignore", ".ignore", ".agent-docs-doctorignore"):
             path = root / filename
-            if path.is_file() and not is_secret_path(path):
+            if path.is_symlink():
+                self.skipped.append(
+                    {"path": filename, "reason": "ignore control symlink not followed"}
+                )
+            elif path.is_file() and not is_secret_path(path):
                 self.rules.extend(self._parse(path, PurePosixPath(".")))
 
     @staticmethod
@@ -126,7 +142,14 @@ class IgnoreMatcher:
         if relative == PurePosixPath("."):
             return
         path = directory / ".gitignore"
-        if path.is_file() and not path.is_symlink():
+        if path.is_symlink():
+            self.skipped.append(
+                {
+                    "path": PurePosixPath(relative / ".gitignore").as_posix(),
+                    "reason": "ignore control symlink not followed",
+                }
+            )
+        elif path.is_file():
             self.rules.extend(self._parse(path, relative))
 
     def ignored(self, relative: PurePosixPath, is_dir: bool = False) -> bool:
@@ -141,17 +164,70 @@ class IgnoreMatcher:
             scoped_parts = scoped.parts
             if rule.directory_only:
                 if rule.anchored or "/" in rule.pattern:
-                    matched = scoped_text == rule.pattern or scoped_text.startswith(rule.pattern + "/")
+                    directory_parts = scoped_parts if is_dir else scoped_parts[:-1]
+                    directory_paths = (
+                        PurePosixPath(*directory_parts[:index]).as_posix()
+                        for index in range(1, len(directory_parts) + 1)
+                    )
+                    matched = any(path_pattern_matches(path, rule.pattern) for path in directory_paths)
                 else:
                     directory_parts = scoped_parts if is_dir else scoped_parts[:-1]
-                    matched = any(fnmatch.fnmatch(part, rule.pattern) for part in directory_parts)
+                    matched = any(fnmatch.fnmatchcase(part, rule.pattern) for part in directory_parts)
             elif rule.anchored or "/" in rule.pattern:
-                matched = fnmatch.fnmatch(scoped_text, rule.pattern)
+                matched = path_pattern_matches(scoped_text, rule.pattern)
             else:
-                matched = any(fnmatch.fnmatch(part, rule.pattern) for part in scoped_parts)
+                matched = any(fnmatch.fnmatchcase(part, rule.pattern) for part in scoped_parts)
             if matched:
                 ignored = not rule.negate
         return ignored
+
+
+def path_pattern_matches(path: str, pattern: str) -> bool:
+    """Match slash-separated ignore patterns without letting * cross a slash."""
+
+    path_parts = PurePosixPath(path).parts
+    pattern_parts = PurePosixPath(pattern).parts
+
+    def match(path_index: int, pattern_index: int) -> bool:
+        if pattern_index == len(pattern_parts):
+            return path_index == len(path_parts)
+        segment = pattern_parts[pattern_index]
+        if segment == "**":
+            if pattern_index == len(pattern_parts) - 1:
+                return path_index < len(path_parts)
+            return match(path_index, pattern_index + 1) or (
+                path_index < len(path_parts) and match(path_index + 1, pattern_index)
+            )
+        return (
+            path_index < len(path_parts)
+            and fnmatch.fnmatchcase(path_parts[path_index], segment)
+            and match(path_index + 1, pattern_index + 1)
+        )
+
+    return match(0, 0)
+
+
+def name_tokens(stem: str) -> set[str]:
+    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", stem)
+    separated = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", separated)
+    return set(re.findall(r"[A-Za-z0-9]+", separated.lower()))
+
+
+def name_has_hint(stem: str) -> bool:
+    tokens = name_tokens(stem)
+    return bool(
+        tokens & NAME_HINT_TOKENS
+        or {"work", "queue"}.issubset(tokens)
+        or {"current", "state"}.issubset(tokens)
+        or ("model" in tokens and bool(tokens & {"config", "configs"}))
+    )
+
+
+def in_rules_tree(parts: tuple[str, ...], platform_directory: str) -> bool:
+    return any(
+        parts[index : index + 2] == (platform_directory, "rules")
+        for index in range(len(parts) - 1)
+    )
 
 
 def is_secret_path(path: Path | PurePosixPath) -> bool:
@@ -171,9 +247,7 @@ def is_candidate(relative: PurePosixPath, fallback_names: frozenset[str] = froze
         return True
     if relative.name in fallback_names:
         return True
-    if len(parts_lower) >= 2 and parts_lower[-2] == "rules" and (
-        ".claude" in parts_lower or ".cursor" in parts_lower
-    ):
+    if in_rules_tree(parts_lower, ".claude") or in_rules_tree(parts_lower, ".cursor"):
         return suffix in {".md", ".mdc"}
     if name == "config.toml" and ".codex" in parts_lower:
         return True
@@ -181,7 +255,7 @@ def is_candidate(relative: PurePosixPath, fallback_names: frozenset[str] = froze
         return True
     if name in {".cursorignore", ".cursorindexingignore"}:
         return True
-    return suffix in TEXT_SUFFIXES and bool(NAME_HINT.search(relative.stem))
+    return suffix in TEXT_SUFFIXES and name_has_hint(relative.stem)
 
 
 def codex_fallback_filenames(root: Path) -> tuple[str, ...]:
@@ -189,7 +263,9 @@ def codex_fallback_filenames(root: Path) -> tuple[str, ...]:
     matcher = IgnoreMatcher(root)
     if matcher.ignored(PurePosixPath(".codex/config.toml")):
         return ()
-    text, warning = read_text(path) if path.is_file() and not path.is_symlink() else (None, None)
+    text, _, warning = (
+        read_text(path) if path.is_file() and not path.is_symlink() else (None, None, None)
+    )
     if text is None or warning:
         return ()
     match = CODEX_FALLBACK_LIST.search(text)
@@ -218,7 +294,7 @@ def walk_candidates(
     matcher = IgnoreMatcher(root)
     candidates: list[Path] = []
     symlink_candidates: list[Path] = []
-    skipped: list[dict[str, str]] = []
+    skipped = matcher.skipped
     for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
         current_path = Path(current)
         rel_current = current_path.relative_to(root)
@@ -232,6 +308,10 @@ def walk_candidates(
                 )
                 continue
             if matcher.ignored(rel, is_dir=True):
+                if any(part in DEFAULT_IGNORED_DIRS for part in rel.parts):
+                    skipped.append(
+                        {"path": rel.as_posix(), "reason": "default excluded directory"}
+                    )
                 continue
             kept_dirs.append(dirname)
         dirs[:] = kept_dirs
@@ -241,17 +321,17 @@ def walk_candidates(
             if matcher.ignored(rel):
                 continue
             if is_secret_path(rel):
-                if NAME_HINT.search(rel.stem) or rel.name.lower() in EXACT_NAMES:
+                if name_has_hint(rel.stem) or rel.name.lower() in EXACT_NAMES:
                     skipped.append({"path": rel.as_posix(), "reason": "secret-like filename"})
                 continue
             if is_candidate(rel, fallback_names):
                 if path.is_symlink():
                     symlink_candidates.append(path)
                     continue
-                try:
-                    path.resolve().relative_to(root.resolve())
-                except (OSError, ValueError):
-                    skipped.append({"path": rel.as_posix(), "reason": "symlink escapes audit root"})
+                if not path.is_file():
+                    skipped.append(
+                        {"path": rel.as_posix(), "reason": "non-regular filesystem entry"}
+                    )
                     continue
                 candidates.append(path)
     for path in symlink_candidates:
@@ -259,6 +339,9 @@ def walk_candidates(
         try:
             resolved = path.resolve(strict=True)
             target_relative = PurePosixPath(resolved.relative_to(root.resolve()).as_posix())
+        except FileNotFoundError:
+            skipped.append({"path": rel.as_posix(), "reason": "symlink target does not exist"})
+            continue
         except (OSError, ValueError):
             skipped.append({"path": rel.as_posix(), "reason": "symlink escapes audit root"})
             continue
@@ -276,14 +359,18 @@ def walk_candidates(
     return candidates, skipped
 
 
-def read_text(path: Path) -> tuple[str | None, str | None]:
+def read_text(path: Path) -> tuple[str | None, str | None, str | None]:
     try:
         size = path.stat().st_size
         if size > MAX_READ_BYTES:
-            return None, f"file exceeds {MAX_READ_BYTES} byte read limit"
-        return path.read_text(encoding="utf-8", errors="replace"), None
+            return None, None, f"file exceeds {MAX_READ_BYTES} byte read limit"
+        raw = path.read_bytes()
+        if len(raw) > MAX_READ_BYTES:
+            return None, None, f"file exceeds {MAX_READ_BYTES} byte read limit"
+        text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+        return text, hashlib.sha256(raw).hexdigest(), None
     except OSError as exc:
-        return None, f"unable to read: {exc.__class__.__name__}"
+        return None, None, f"unable to read: {exc.__class__.__name__}"
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str | None]:
@@ -320,6 +407,7 @@ def classify(
     selected_codex_paths: frozenset[str],
 ) -> dict[str, Any]:
     name = relative.name.lower()
+    tokens = name_tokens(relative.stem)
     parts = tuple(part.lower() for part in relative.parts)
     archive = any(part in ARCHIVE_PARTS for part in parts[:-1])
     status_value = str(metadata.get("status", "")).lower()
@@ -341,7 +429,7 @@ def classify(
         role = "authority" if selected_by_codex else "reference"
     elif name in {"claude.md", "claude.local.md"}:
         kind, platforms, loading, role = "instruction", ["claude-code"], "automatic", "adapter"
-    elif ".claude" in parts and "rules" in parts:
+    elif in_rules_tree(parts, ".claude"):
         scoped = "paths" in metadata
         kind, platforms, loading, role = (
             "scoped-rule",
@@ -349,7 +437,7 @@ def classify(
             "conditional" if scoped else "automatic",
             "procedure",
         )
-    elif ".cursor" in parts and "rules" in parts:
+    elif in_rules_tree(parts, ".cursor"):
         if relative.suffix.lower() != ".mdc":
             kind, platforms, loading, role = "rule-like-file", ["cursor"], "not-loaded", "reference"
         else:
@@ -359,7 +447,7 @@ def classify(
             kind, platforms, loading, role = "scoped-rule", ["cursor"], load_mode, "procedure"
     elif name == "skill.md":
         kind, platforms, loading, role = "skill", ["agent-skills"], "conditional", "procedure"
-    elif "status" in name or "handoff" in name or "work_queue" in name or "work-queue" in name:
+    elif "status" in tokens or "handoff" in tokens or {"work", "queue"}.issubset(tokens):
         kind, platforms, loading, role = "state", [], "manual", "current-state"
     elif archive or retired:
         kind, platforms, loading, role = "history", [], "manual", "history"
@@ -382,6 +470,28 @@ def classify(
 
 def line_for_offset(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
+
+
+def column_for_offset(text: str, offset: int) -> int:
+    return offset - text.rfind("\n", 0, offset)
+
+
+def mask_fenced_code(text: str) -> str:
+    """Mask Markdown fenced code while preserving offsets and line structure."""
+
+    masked = list(text)
+    opener = re.compile(r"(?m)^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)")
+    search_from = 0
+    while match := opener.search(text, search_from):
+        fence = match.group(1)
+        closer = re.compile(rf"(?m)^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*(?:\n|$)")
+        closing_match = closer.search(text, match.end())
+        end = closing_match.end() if closing_match else len(text)
+        for index in range(match.start(), end):
+            if masked[index] != "\n":
+                masked[index] = " "
+        search_from = end
+    return "".join(masked)
 
 
 def markdown_link_payloads(text: str) -> Iterator[tuple[str, int]]:
@@ -433,27 +543,38 @@ def sanitized_reference_target(target: str) -> tuple[str, str | None, str]:
 
 def local_references(text: str, relative: PurePosixPath, root: Path) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
-    raw_matches = [(markdown_destination(raw), start) for raw, start in markdown_link_payloads(text)]
-    raw_matches.extend((match.group(1).strip(), match.start()) for match in IMPORT_LINE.finditer(text))
+    scan_text = mask_fenced_code(text)
+    raw_matches = [
+        (markdown_destination(raw), start) for raw, start in markdown_link_payloads(scan_text)
+    ]
+    raw_matches.extend(
+        (match.group(1).strip(), match.start()) for match in IMPORT_LINE.finditer(scan_text)
+    )
     for raw, start in sorted(raw_matches, key=lambda item: item[1]):
         target = raw.split("#", 1)[0]
         if not target or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE) or target.startswith("#"):
             continue
-        candidate = (root / target.lstrip("/")).resolve() if target.startswith("/") else (
-            root / relative.parent / target
-        ).resolve()
-        try:
-            candidate.relative_to(root.resolve())
-            inside = True
-        except ValueError:
-            inside = False
         display_target, target_sha256, target_kind = sanitized_reference_target(target)
+        if target_kind == "absolute-filesystem":
+            inside = False
+            exists = None
+        else:
+            candidate = (root / target.lstrip("/")).resolve() if target.startswith("/") else (
+                root / relative.parent / target
+            ).resolve()
+            try:
+                candidate.relative_to(root.resolve())
+                inside = True
+            except ValueError:
+                inside = False
+            exists = candidate.exists() if inside else None
         reference = {
             "target": display_target,
             "target_kind": target_kind,
             "line": line_for_offset(text, start),
+            "column": column_for_offset(text, start),
             "inside_root": inside,
-            "exists": candidate.exists() if inside else None,
+            "exists": exists,
         }
         if target_sha256:
             reference["target_sha256"] = target_sha256
@@ -511,18 +632,16 @@ def build_inventory(root_value: str | Path) -> dict[str, Any]:
     for path in paths:
         relative = PurePosixPath(path.relative_to(root).as_posix())
         stat = path.stat()
-        text, warning = read_text(path)
+        text, digest, warning = read_text(path)
         if warning:
             warnings.append({"path": relative.as_posix(), "message": warning})
         metadata: dict[str, Any] = {}
         metadata_error = None
         refs: list[dict[str, Any]] = []
-        digest = None
         lines = None
         if text is not None:
             metadata, metadata_error = parse_frontmatter(text)
             refs = local_references(text, relative, root)
-            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
             lines = len(text.splitlines())
             all_blocks.extend(paragraph_blocks(text, relative.as_posix()))
         if metadata_error:
@@ -604,12 +723,17 @@ def deterministic_findings(inventory: dict[str, Any]) -> list[dict[str, Any]]:
             if ref["inside_root"] and not ref["exists"]:
                 findings.append(
                     {
-                        "id": f"broken-reference:{item['path']}:{ref['line']}:{ref['target']}",
+                        "id": (
+                            f"broken-reference:{item['path']}:{ref['line']}:"
+                            f"{ref['column']}:{ref['target']}"
+                        ),
                         "severity": "medium",
                         "evidence_type": "deterministic",
                         "category": "broken-reference",
                         "summary": "A local Markdown reference does not resolve.",
-                        "locations": [{"path": item["path"], "line": ref["line"]}],
+                        "locations": [
+                            {"path": item["path"], "line": ref["line"], "column": ref["column"]}
+                        ],
                         "evidence": {"target": ref["target"]},
                         "uncertainty": "Generated-at-runtime targets may be intentionally absent.",
                     }
@@ -635,6 +759,8 @@ def build_audit(root_value: str | Path) -> dict[str, Any]:
             "confirms loading.",
             "Semantic contradiction, staleness, and operational necessity require judgment.",
             "Ignored, secret-like, unreadable, and over-limit files are not inspected.",
+            "Default-pruned directories are listed in inventory.skipped; restore a needed default "
+            "with an explicit negation in .agent-docs-doctorignore.",
         ],
     }
 

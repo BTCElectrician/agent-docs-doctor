@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -35,8 +36,28 @@ class DoctorLibTests(unittest.TestCase):
             root = Path(value)
             self.write(root, "AGENTS.md", "# Root\n")
             self.write(root, "fixtures/sample/AGENTS.md", "# Synthetic\n")
-            paths = [item["path"] for item in build_inventory(root)["files"]]
+            result = build_inventory(root)
+            paths = [item["path"] for item in result["files"]]
         self.assertEqual(paths, ["AGENTS.md"])
+        self.assertIn(
+            {"path": "fixtures", "reason": "default excluded directory"},
+            result["skipped"],
+        )
+
+    def test_default_exclusion_can_be_explicitly_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".agent-docs-doctorignore", "!fixtures/\n")
+            self.write(root, "fixtures/sample/AGENTS.md", "# Synthetic\n")
+            result = build_inventory(root)
+        self.assertEqual(
+            [item["path"] for item in result["files"]],
+            ["fixtures/sample/AGENTS.md"],
+        )
+        self.assertNotIn(
+            {"path": "fixtures", "reason": "default excluded directory"},
+            result["skipped"],
+        )
 
     def test_discovers_nested_instructions_and_scoped_rules(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -44,12 +65,15 @@ class DoctorLibTests(unittest.TestCase):
             self.write(root, "AGENTS.md", "# Root\n")
             self.write(root, "services/api/AGENTS.override.md", "# API\n")
             self.write(root, ".claude/rules/python.md", "# Python\n")
+            self.write(root, ".claude/rules/python/style.md", "# Python style\n")
             self.write(root, ".cursor/rules/web.mdc", "---\nalwaysApply: false\n---\n# Web\n")
+            self.write(root, "other/rules/python/style.md", "# Not a platform rule\n")
             paths = [item["path"] for item in build_inventory(root)["files"]]
         self.assertEqual(
             paths,
             [
                 ".claude/rules/python.md",
+                ".claude/rules/python/style.md",
                 ".cursor/rules/web.mdc",
                 "AGENTS.md",
                 "services/api/AGENTS.override.md",
@@ -83,6 +107,48 @@ class DoctorLibTests(unittest.TestCase):
             self.write(root, "docs/STATUS.md", "# Public\n")
             paths = [item["path"] for item in build_inventory(root)["files"]]
         self.assertEqual(paths, ["docs/STATUS.md"])
+
+    def test_slash_pattern_star_does_not_cross_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".gitignore", "docs/*.md\n")
+            self.write(root, "docs/STATUS.md", "# Direct status\n")
+            self.write(root, "docs/nested/STATUS.md", "# Nested status\n")
+            paths = [item["path"] for item in build_inventory(root)["files"]]
+        self.assertEqual(paths, ["docs/nested/STATUS.md"])
+
+    def test_trailing_globstar_does_not_prune_parent_before_negation(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".gitignore", "docs/**\n!docs/AGENTS.md\n")
+            self.write(root, "docs/AGENTS.md", "# Restored root doc\n")
+            self.write(root, "docs/nested/AGENTS.md", "# Still ignored\n")
+            paths = [item["path"] for item in build_inventory(root)["files"]]
+        self.assertEqual(paths, ["docs/AGENTS.md"])
+
+    def test_root_ignore_symlink_is_not_opened(self) -> None:
+        with tempfile.TemporaryDirectory() as value, tempfile.TemporaryDirectory() as outside_value:
+            root = Path(value)
+            outside = self.write(Path(outside_value), "ignore-rules", "AGENTS.md\n")
+            (root / ".gitignore").symlink_to(outside)
+            self.write(root, "AGENTS.md", "# Rules\n")
+            original_read_text = Path.read_text
+
+            def guarded_read_text(
+                path: Path, encoding: str | None = None, errors: str | None = None
+            ) -> str:
+                if path == root / ".gitignore":
+                    raise AssertionError("root ignore symlink was opened")
+                return original_read_text(path, encoding=encoding, errors=errors)
+
+            with patch.object(Path, "read_text", guarded_read_text):
+                result = build_inventory(root)
+                paths = [item["path"] for item in result["files"]]
+        self.assertEqual(paths, ["AGENTS.md"])
+        self.assertEqual(
+            result["skipped"],
+            [{"path": ".gitignore", "reason": "ignore control symlink not followed"}],
+        )
 
     def test_secret_like_files_are_never_read(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -134,6 +200,37 @@ class DoctorLibTests(unittest.TestCase):
             paths = [item["path"] for item in build_inventory(root)["files"]]
         self.assertEqual(paths, ["AGENTS.md", "CLAUDE.md"])
 
+    def test_dangling_symlink_has_truthful_skip_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            (root / "AGENTS.md").symlink_to(root / "missing.md")
+            result = build_inventory(root)
+        self.assertEqual(result["files"], [])
+        self.assertEqual(
+            result["skipped"],
+            [{"path": "AGENTS.md", "reason": "symlink target does not exist"}],
+        )
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO support required")
+    def test_non_regular_candidate_is_skipped_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            os.mkfifo(root / "AGENTS.md")
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPTS / "agent_docs_doctor.py"), "inventory", str(root)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            result = json.JSONDecoder().decode(completed.stdout)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(result["files"], [])
+        self.assertEqual(
+            result["skipped"],
+            [{"path": "AGENTS.md", "reason": "non-regular filesystem entry"}],
+        )
+
     def test_exact_overlap_across_files(self) -> None:
         block = (
             "Always require explicit approval before deleting production data or changing release controls."
@@ -170,6 +267,17 @@ class DoctorLibTests(unittest.TestCase):
         self.assertEqual(entry["loading"], "automatic")
         self.assertEqual(entry["role"], "adapter")
 
+    def test_crlf_frontmatter_remains_parseable_with_raw_byte_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            raw = b"---\r\nalwaysApply: true\r\n---\r\n# Rule\r\n"
+            path = root / ".cursor/rules/always.mdc"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(raw)
+            entry = build_inventory(root)["files"][0]
+        self.assertEqual(entry["metadata"]["alwaysApply"], True)
+        self.assertEqual(entry["sha256"], hashlib.sha256(raw).hexdigest())
+
     def test_malformed_frontmatter_is_a_warning(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -190,6 +298,23 @@ class DoctorLibTests(unittest.TestCase):
         broken = [item for item in audit["findings"] if item["category"] == "broken-reference"]
         self.assertEqual(len(broken), 1)
         self.assertEqual(broken[0]["evidence"]["target"], "docs/missing.md")
+
+    def test_same_line_broken_references_have_unique_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(
+                root,
+                "AGENTS.md",
+                "Read [first](missing.md), [again](missing.md), "
+                "[one](/private/one.md), and [two](/private/two.md).\n",
+            )
+            report = build_audit(root)
+        broken = [item for item in report["findings"] if item["category"] == "broken-reference"]
+        identifiers = [item["id"] for item in broken]
+        self.assertEqual(len(broken), 4)
+        self.assertEqual(len(set(identifiers)), 4)
+        self.assertEqual(validate_audit(report), [])
+        self.assertTrue(all("column" in item["locations"][0] for item in broken))
 
     def test_markdown_titles_and_parenthesized_destinations_resolve(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -216,6 +341,54 @@ class DoctorLibTests(unittest.TestCase):
         self.assertEqual(reference["target"], "<root-relative-path>")
         self.assertEqual(reference["target_kind"], "root-relative")
         self.assertIn("target_sha256", reference)
+
+    def test_home_reference_is_sanitized_and_never_resolved_inside_root(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            private_target = "~/.claude/personal.md"
+            self.write(root, "AGENTS.md", f"@{private_target}\n")
+            report = build_audit(root)
+            reference = report["inventory"]["files"][0]["references"][0]
+        self.assertEqual(reference["target"], "<absolute-filesystem-path>")
+        self.assertEqual(reference["target_kind"], "absolute-filesystem")
+        self.assertFalse(reference["inside_root"])
+        self.assertIsNone(reference["exists"])
+        self.assertFalse(any(item["category"] == "broken-reference" for item in report["findings"]))
+
+    def test_references_inside_fenced_code_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(
+                root,
+                "AGENTS.md",
+                "```python\n@dataclass\n[example](docs/example.md)\n```\n\n"
+                "~~~text\n@missing/inside-fence.md\n~~~\n\n"
+                "Read [real](docs/real-missing.md).\n",
+            )
+            report = build_audit(root)
+        broken = [item for item in report["findings"] if item["category"] == "broken-reference"]
+        self.assertEqual(len(broken), 1)
+        self.assertEqual(broken[0]["evidence"]["target"], "docs/real-missing.md")
+
+    def test_unterminated_fence_is_masked_to_end_of_file(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "AGENTS.md", "```text\n@missing/inside-fence.md\n")
+            findings = build_audit(root)["findings"]
+        self.assertFalse(any(item["category"] == "broken-reference" for item in findings))
+
+    def test_crlf_fence_closes_before_real_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            raw = (
+                b"```text\r\n[example](docs/example.md)\r\n```\r\n\r\n"
+                b"Read [real](docs/real-missing.md).\r\n"
+            )
+            (root / "AGENTS.md").write_bytes(raw)
+            report = build_audit(root)
+        broken = [item for item in report["findings"] if item["category"] == "broken-reference"]
+        self.assertEqual(len(broken), 1)
+        self.assertEqual(broken[0]["evidence"]["target"], "docs/real-missing.md")
 
     def test_root_relative_reference_resolves_inside_audit_root(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -264,6 +437,46 @@ class DoctorLibTests(unittest.TestCase):
             result = build_inventory(root)
         self.assertIsNone(result["files"][0]["sha256"])
         self.assertIn("read limit", result["warnings"][0]["message"])
+
+    def test_file_hash_uses_raw_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            raw = b"# Rules\r\n\r\nUse CRLF safely.\r\n"
+            (root / "AGENTS.md").write_bytes(raw)
+            entry = build_inventory(root)["files"][0]
+        self.assertEqual(entry["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(entry["bytes"], len(raw))
+
+    def test_invalid_utf8_is_hashed_raw_and_decoded_safely(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            raw = b"# Rules\n\xff\n"
+            (root / "AGENTS.md").write_bytes(raw)
+            entry = build_inventory(root)["files"][0]
+        self.assertEqual(entry["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(entry["lines"], 2)
+
+    def test_filename_hints_use_token_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "STATUSBAR_WIDGETS.md", "# UI\n")
+            self.write(root, "EXPLANATION.md", "# Explanation\n")
+            self.write(root, "API_STATUS.md", "# API status\n")
+            self.write(root, "CURRENT_PLAN.md", "# Current plan\n")
+            entries = {item["path"]: item for item in build_inventory(root)["files"]}
+        self.assertEqual(set(entries), {"API_STATUS.md", "CURRENT_PLAN.md"})
+        self.assertEqual(entries["API_STATUS.md"]["role"], "current-state")
+
+    def test_camelcase_filename_hints_are_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            for name in ("AgentRules.md", "WorkQueue.md", "CurrentState.md", "ModelConfigs.md"):
+                self.write(root, name, f"# {name}\n")
+            paths = [item["path"] for item in build_inventory(root)["files"]]
+        self.assertEqual(
+            paths,
+            ["AgentRules.md", "CurrentState.md", "ModelConfigs.md", "WorkQueue.md"],
+        )
 
     def test_output_is_deterministic_and_uses_relative_root(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -314,6 +527,31 @@ class DoctorLibTests(unittest.TestCase):
                 self.assertIn("usage: validate_report.py <report.json|->", completed.stdout)
                 self.assertIn("standard input", completed.stdout)
                 self.assertEqual(completed.stderr, "")
+
+    def test_validator_entrypoints_share_exit_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            valid = root / "valid.json"
+            invalid = root / "invalid.json"
+            malformed = root / "malformed.json"
+            valid.write_text(json.dumps(build_audit(root)), encoding="utf-8")
+            invalid.write_text("{}", encoding="utf-8")
+            malformed.write_text("{", encoding="utf-8")
+            entrypoints = (
+                [sys.executable, str(SCRIPTS / "validate_report.py")],
+                [sys.executable, str(SCRIPTS / "agent_docs_doctor.py"), "validate-report"],
+            )
+            cases = ((valid, 0), (invalid, 1), (malformed, 2), (root / "missing.json", 2))
+            for entrypoint in entrypoints:
+                for report, expected in cases:
+                    with self.subTest(entrypoint=entrypoint[-1], report=report.name):
+                        completed = subprocess.run(
+                            [*entrypoint, str(report)],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertEqual(completed.returncode, expected, completed.stderr)
 
     def test_validator_rejects_incomplete_inventory_and_unhashable_id(self) -> None:
         incomplete = {
@@ -372,16 +610,14 @@ class DoctorLibTests(unittest.TestCase):
             )
             self.write(root, "PRIVATE_GUIDE.md", "# Ignored fallback\n")
             ignored_config = root / ".codex/config.toml"
-            original_read_text = Path.read_text
+            original_read_bytes = Path.read_bytes
 
-            def guarded_read_text(
-                path: Path, encoding: str | None = None, errors: str | None = None
-            ) -> str:
+            def guarded_read_bytes(path: Path) -> bytes:
                 if path == ignored_config:
                     raise AssertionError("ignored config was opened")
-                return original_read_text(path, encoding=encoding, errors=errors)
+                return original_read_bytes(path)
 
-            with patch.object(Path, "read_text", guarded_read_text):
+            with patch.object(Path, "read_bytes", guarded_read_bytes):
                 paths = [item["path"] for item in build_inventory(root)["files"]]
         self.assertNotIn("PRIVATE_GUIDE.md", paths)
 
@@ -439,7 +675,7 @@ class DoctorLibTests(unittest.TestCase):
         self.assertNotIn(".agents/skills/agent-docs-doctor/STATUS.md", paths)
         self.assertIn(".agents/skills/other-skill/SKILL.md", paths)
         self.assertIn("STATUS.md", paths)
-        self.assertFalse(any(item["category"] == "competing-current-state" for item in report["findings"]))
+        self.assertFalse(any(item["category"] == "competing-current-truth" for item in report["findings"]))
         self.assertIn(
             {
                 "path": ".agents/skills/agent-docs-doctor",
@@ -448,6 +684,46 @@ class DoctorLibTests(unittest.TestCase):
             skipped,
         )
         self.assertEqual(bytecode, [])
+
+    def test_cache_free_syntax_checker(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "valid.py", "value = 1\n")
+            invalid = self.write(root, "invalid.py", "if True print('no')\n")
+            checker = [sys.executable, str(SCRIPTS / "check_python_syntax.py")]
+            valid = subprocess.run(
+                [*checker, str(root / "valid.py")],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            failed = subprocess.run(
+                [*checker, str(invalid)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            missing = subprocess.run(
+                [*checker, str(root / "definitely-missing")],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            caches = list(root.rglob("__pycache__")) + list(root.rglob("*.pyc"))
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("invalid syntax", failed.stderr)
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn("path does not exist", missing.stderr)
+        self.assertEqual(caches, [])
+
+    def test_public_commands_do_not_prescribe_shared_temp_or_compileall(self) -> None:
+        public_workflow = "\n".join(
+            (ROOT / name).read_text(encoding="utf-8")
+            for name in ("README.md", "SKILL.md", "CONTRIBUTING.md")
+        )
+        self.assertNotIn("/tmp/agent-docs-audit.json", public_workflow)
+        self.assertNotIn("-m compileall", public_workflow)
 
 
 if __name__ == "__main__":

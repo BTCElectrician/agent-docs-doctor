@@ -25,9 +25,16 @@ Verified against official sources on 2026-07-15. Treat all platform behavior as 
 
 Codex constructs an instruction chain once per run. It first selects a global `AGENTS.override.md` or `AGENTS.md`, then walks from the repository root to the current working directory. In each directory it selects at most one non-empty file in priority order: `AGENTS.override.md`, `AGENTS.md`, then configured fallback filenames. Selected project files concatenate root to leaf, and nearer guidance takes precedence on conflict. Discovery stops at the current working directory.
 
+User configuration normally lives at `~/.codex/config.toml`. Codex can also layer project-scoped
+`.codex/config.toml` files from the project root toward the working directory, but only for trusted
+projects. This auditor reads only the requested root's non-ignored `.codex/config.toml` to discover
+`project_doc_fallback_filenames`. Its `loading: automatic` label means Codex behavior when that
+trusted project configuration layer is active; the auditor does not infer or attest trust.
+
 The dedicated guide describes `project_doc_max_bytes` as a combined chain limit with a 32 KiB default. A separate advanced-config page has used per-file wording, so exact byte-limit semantics should be verified against the deployed Codex version. A fallback such as `CLAUDE.md` is an alternative in a directory, not an additional file when `AGENTS.md` already exists there.
 
-Source: [OpenAI, Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md).
+Sources: [OpenAI, Custom instructions with AGENTS.md](https://developers.openai.com/codex/guides/agents-md)
+and [OpenAI, Configuration reference](https://developers.openai.com/codex/config-reference).
 
 ### Skills and plugins
 
