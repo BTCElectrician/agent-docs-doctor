@@ -176,7 +176,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing discovery rules or repor
 
 ## Maturity and license
 
-Status: **release candidate**. The deterministic core and synthetic fixture suite are implemented;
-the public repository is created only after the recorded release and behavioral gates pass.
+Status: **public initial release**. The deterministic core, synthetic fixture suite, independent
+Fable review reconciliation, and fresh eight-case behavioral acceptance record are complete.
 
 Licensed under [Apache License 2.0](LICENSE).
