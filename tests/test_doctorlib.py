@@ -153,7 +153,7 @@ class DoctorLibTests(unittest.TestCase):
             "from doctorlib import path_pattern_matches; "
             "n=40; path='/'.join(['x']*n); "
             "pattern='/'.join(['**']*n+['missing']); "
-            "assert path_pattern_matches(path, pattern) is False"
+            "assert not path_pattern_matches(path, pattern)"
         )
         completed = subprocess.run(
             [sys.executable, "-B", "-c", code],
@@ -502,7 +502,7 @@ class DoctorLibTests(unittest.TestCase):
         self.assertFalse(any(item["category"] == "broken-reference" for item in report["findings"]))
 
     def test_named_home_and_windows_drive_references_are_sanitized(self) -> None:
-        private_targets = ("~someone/private/plan.md", "C:/Users/Someone/private-plan.md")
+        private_targets = ("~someone/private/plan.md", "C:/example/private-plan.md")
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
             self.write(
@@ -516,7 +516,7 @@ class DoctorLibTests(unittest.TestCase):
         self.assertEqual(len(references), 2)
         self.assertTrue(all(item["target"] == "<absolute-filesystem-path>" for item in references))
         self.assertTrue(all(item["target_kind"] == "absolute-filesystem" for item in references))
-        self.assertTrue(all(item["inside_root"] is False for item in references))
+        self.assertTrue(all(not item["inside_root"] for item in references))
         self.assertTrue(all(item["exists"] is None for item in references))
         for target in private_targets:
             self.assertNotIn(target, serialized)

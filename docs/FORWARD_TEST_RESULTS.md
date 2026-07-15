@@ -2,87 +2,96 @@
 
 Run date: 2026-07-15
 
-Configuration: [`ft-2026-07-15-post-review-final`](projects/forward-tests/MODEL_CONFIGS.md)
+Configuration: [`ft-2026-07-15-post-fable-03e9d44`](projects/forward-tests/MODEL_CONFIGS.md)
 
 Status: qualitative skill validation, not a pinned-model performance benchmark
 
 ## Method
 
-Each case used a fresh Codex subagent with no inherited conversation turns. The agent received only:
+Each of the eight public fixtures was audited by a different fresh Codex collaboration agent against
+the frozen post-Fable engine commit `03e9d44ddbad59d25e43eda6de802751e1667ce4`. Each agent received
+only:
 
-- the local skill path;
-- one raw synthetic fixture path;
-- the natural request to audit the repository and say what should change;
-- a read-only, no-file-creation boundary.
+- the instruction to read the committed `SKILL.md` completely;
+- one raw fixture path;
+- a natural request to audit it and say what should change;
+- a read-only, no-delegation, no-repository-artifact boundary; and
+- an explicit prohibition on prior outputs, test expectations, review artifacts, external fixture
+  descriptions, and this results document.
 
-Prompts did not disclose the intended diagnosis, suspected bug, expected fix, or fixture category. Agents wrote temporary ledgers only outside the repository. No forward-test artifact was left where a later agent could discover it.
+No prompt disclosed the intended diagnosis, suspected defect, expected recommendation, or fixture
+category. Temporary ledgers were unique, outside the repository, validated, and removed. All eight
+agents reported that the worktree remained clean.
 
-The final accepted set ran after the complete review hardening pass. Earlier exploratory and pre-boundary runs are not counted. One replacement conflict run returned no audit and then a blocked coordination response; one superseded stale-history worker was interrupted after it failed to return. Neither is acceptance evidence. Every counted case below came from a different fresh agent instructed to perform the audit directly without delegation.
+Earlier behavioral runs do not count toward this acceptance set. The five-case pre-Fable set, the
+three fresh cases run at `9467190`, one blocked replacement conflict attempt, and one interrupted
+stale-history worker are retained only as superseded or excluded history. Code and discovery
+semantics changed after `9467190`, so reusing those outputs would have overstated provenance.
 
 ## Acceptance criteria
 
 - discover the relevant surfaces and validate the deterministic ledger;
 - distinguish automatic, conditional, and manual loading;
 - preserve safety rules and intentional repetition;
-- identify real semantic conflict without calling it deterministic proof;
-- recognize stale authority;
-- avoid inventing problems in a healthy fixture;
-- avoid forcing a non-code workspace into engineering machinery;
-- remain read-only;
-- propose evaluation rather than claim a challenger is better.
+- identify real semantic conflict without presenting it as deterministic proof;
+- recognize stale authority and unrouted scoped state;
+- avoid inventing problems in healthy, thin-adapter, and lightweight fixtures;
+- avoid treating exact duplication as automatically harmful context bloat;
+- remain read-only; and
+- propose evaluation instead of claiming an untested challenger is better.
 
 ## Final cases
 
 | Fixture | Result | Key behavior | Verdict |
 |---|---|---|---|
-| `healthy-repo` | No change | Mapped root, state, and nested API scope; preserved deployment/data and schema safeguards; found no deterministic or semantic defect | Pass |
-| `conflicting-rules` | High semantic conflict | Compared root deployment approval with conditional Cursor preview automation; stated the ambiguity and alternative explanation; recommended owner decision and fail-closed production control | Pass |
-| `intentional-duplication` | No change | Confirmed exact overlap but preserved both credential/customer-data rules because the subtree is exported independently | Pass |
-| `stale-history` | High stale-authority finding | Connected the root link to retired metadata, preserved historical material, and correctly kept the negative fixture unchanged | Pass |
-| `lightweight-workspace` | One low-cost pointer | Kept the two-file research structure, suggested only a short status pointer, and rejected skills/hooks/extra planning machinery | Pass |
+| `healthy-repo` | No change | Mapped root, nested API scope, and status; preserved deployment/data and schema safeguards; found no defect | Pass |
+| `bloated-repo` | Exact overlap, no required change | Distinguished cross-client safety repetition from runtime bloat; identified the manual maintenance copy and offered only an evaluated optional challenger | Pass |
+| `competing-status` | Medium routing issue | Treated three state files as compatible scoped facts, not contradiction; recommended a root status index without forced consolidation | Pass |
+| `conflicting-rules` | Safety-critical semantic conflict | Compared root deployment approval with conditional Cursor preview automation, preserved the stricter gate, stated uncertainty, and required owner resolution | Pass with severity caveat |
+| `intentional-duplication` | Keep | Preserved the repeated credential/customer-data safeguard because the subtree is independently exported | Pass |
+| `lightweight-workspace` | No change | Kept the two-file research structure and rejected skills, hooks, consolidation, or extra machinery | Pass |
+| `stale-history` | High stale-authority finding | Connected the automatic root instruction to retired plan metadata, preserved history, and required a real owner-designated successor | Pass |
+| `thin-adapters` | No required change | Validated the Claude import and Cursor scope, preserved the release gate, and surfaced only the owner-intent boundary around cross-client frontend coverage | Pass |
 
-Final behavioral result: **5 of 5 cases met the predeclared qualitative criteria.** This does not establish superiority over another skill, model, or instruction architecture.
+Final behavioral result: **8 of 8 cases met the predeclared qualitative criteria.** The conflict
+agent used `critical` severity while also acknowledging that production impact was not established;
+`high` would be a reasonable calibration. The core diagnosis and fail-closed recommendation were
+still correct, so this is recorded as a severity limitation rather than hidden or counted as a
+behavioral failure.
 
-## Initial implementation defects hardened before review
+## Initial implementation hardening
 
-1. **Ignore traversal:** the first unit run over-pruned a directory in a case where the parent remained traversable. The initial correction was later replaced by the stricter parent-exclusion semantics described below.
-2. **Secret-rule false exclusion:** an adversarial code pass found that a broad filename heuristic could skip a legitimate `secret-handling-rules.md`. Secret skipping now uses exact sensitive names and key/certificate suffixes; a regression test proves safety guidance remains visible.
-3. **Escaping symlink:** an adversarial code pass found that a candidate symlink could point outside the requested audit root. Escaping symlinks are now skipped with an explicit reason; a regression test proves the external file is not read.
-4. **Root-relative Markdown links:** root-relative links were classified as outside the repository. They now resolve from the audit root; a regression test covers the case.
-5. **Fixture contamination:** a repository self-audit initially included synthetic fixtures as live authority. Common fixture/testdata directories are now excluded when auditing a parent, while auditing a fixture root directly still works.
+Before independent review, early runs exposed and fixed ignore traversal, an overbroad secret-name
+heuristic, escaping candidate symlinks, root-relative link resolution, and synthetic-fixture
+contamination. These were implementation-development defects, not findings from the later fresh
+peer review.
 
-## Independent adversarial and primary-review defects
+## Independent adversarial and primary review
 
-All seven findings from a context-isolated adversarial code review were reproduced and fixed:
+The context-isolated adversarial review and primary reproductions fixed eleven boundary defects,
+including in-root secret aliases, nested ignore semantics, Codex fallback discovery, bytecode
+writes, report-shape validation, filename classification, Markdown destinations, overlap-text data
+minimization, absolute-path minimization, ignored Codex config reads, and installed-layout self-audit.
 
-1. In-root symlinks could alias a secret-like file and expose its metadata.
-2. Nested `.gitignore` files were not applied, and negation could incorrectly restore a file beneath an excluded parent.
-3. Codex fallback filenames configured in `.codex/config.toml` were omitted from discovery and loading classification.
-4. An installed CLI could write `__pycache__` into the audited repository.
-5. The report validator accepted incomplete shapes and could crash on a non-string finding identifier.
-6. Prefix-based filename classification mislabeled history and platform/loading behavior.
-7. The Markdown-link parser produced false broken-reference findings for titles and balanced parentheses.
+## Fable review hardening
 
-Two additional primary-review data-minimization findings were also reproduced and fixed:
+The real `claude-fable-5` review of `9467190` then found bounded correctness, resource, privacy, test,
+and documentation issues. Accepted fixes include memoized globstars, capped ignore controls, linear
+single-line Markdown scanning, bare frontmatter delimiters, guarded hostile references, `~user` and
+Windows-drive minimization, guarded candidate reads, stronger no-read tests, cross-process hash-seed
+determinism, and public installation/encoding guidance. Full provenance, cost, accepted findings,
+and bounded rejections are in [`FABLE_REVIEW.md`](reviews/FABLE_REVIEW.md).
 
-8. Exact-overlap occurrences copied normalized paragraph bodies into the JSON ledger; occurrences now retain only hash, relative path, and line evidence.
-9. Absolute-style Markdown targets could serialize private filesystem paths; the ledger now emits a typed placeholder and one-way hash.
-
-The operator-requested final acceptance set occurred after all nine reproduced fixes above.
-
-## Final boundary review
-
-Two further boundary reproductions were fixed before the counted runs:
-
-1. Fallback discovery opened and used an ignored `.codex/config.toml`; ignored configuration is now neither opened nor used.
-2. A repository-local installation could inventory its own `SKILL.md` and `STATUS.md`; the running auditor package is now explicitly skipped while other installed skills remain auditable.
-
-The final 5-of-5 result therefore reflects all eleven review fixes and the full deterministic suite.
+The final eight-case set ran only after this post-Fable hardening was committed.
 
 ## Limitations and next evaluation
 
-- The product exposed these workers only as Codex collaboration subagents; it did not expose the exact backing model identifier, revision, or reasoning setting. The configuration is therefore intentionally unpinned and cannot support model-level reproducibility or cost/latency claims.
+- The product exposed these workers only as Codex collaboration agents; the exact backing model,
+  revision, and reasoning setting were not available.
 - Synthetic fixtures test controlled semantics, not the full messiness of a public repository.
-- Agents were judged from final audit outputs; tool traces and token telemetry were unavailable.
-- Cursor and Claude client binaries were not executed; platform claims came from current official documentation.
-- Public release should add pinned-client integration checks and a blinded incumbent-versus-challenger evaluation on representative public repositories.
+- Agents were judged from final audit outputs; tool traces, token telemetry, and latency were not
+  available.
+- Cursor and Claude client binaries were not used for behavioral fixture tests; platform claims
+  came from the dated official-source reference.
+- This result establishes qualitative conformance for the eight fixtures, not superiority over
+  another skill, model, or instruction architecture.
