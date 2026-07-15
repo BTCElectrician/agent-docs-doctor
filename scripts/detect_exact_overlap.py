@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import sys
 
-from doctorlib import build_inventory, dump_json
+sys.dont_write_bytecode = True
+
+from doctorlib import build_inventory, dump_json  # noqa: E402
 
 
 def main() -> int:

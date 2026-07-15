@@ -58,11 +58,11 @@ Use $agent-docs-doctor to audit this repository's agent instructions and tell me
 Or run the evidence engine directly:
 
 ```bash
-python3 scripts/agent_docs_doctor.py audit . --pretty > /tmp/agent-docs-audit.json
-python3 scripts/validate_report.py /tmp/agent-docs-audit.json
+python3 -B .agents/skills/agent-docs-doctor/scripts/agent_docs_doctor.py audit . --pretty > /tmp/agent-docs-audit.json
+python3 -B .agents/skills/agent-docs-doctor/scripts/validate_report.py /tmp/agent-docs-audit.json
 ```
 
-The scripts write only to standard output unless your shell explicitly redirects it.
+When developing this repository itself, shorten the script paths to `scripts/...`. The entry points disable bytecode writes, and `-B` adds an explicit interpreter-level guard. The scripts write only to standard output unless your shell redirects it.
 
 ## Example inventory
 
@@ -106,10 +106,13 @@ That tree is a proposal, not a universal standard. A real audit includes an incu
 The default audit:
 
 - walks only the requested root;
-- honors `.gitignore`, `.ignore`, and `.agent-docs-doctorignore` with common negation behavior;
+- honors root and nested `.gitignore` files plus root `.ignore` and `.agent-docs-doctorignore`, including the rule that a file cannot be re-included while its parent directory remains excluded;
 - skips secret- or credential-like filenames;
+- follows only in-root symlinks whose targets are auditable, non-ignored, non-secret-like regular files;
+- excludes its own installed package from a parent-repository audit while continuing to inventory other installed skills;
 - refuses to read candidate files above a fixed safety limit while reporting the limitation;
 - emits relative paths and no timestamps, making output reproducible and less likely to leak local paths;
+- omits duplicated paragraph bodies and sanitizes absolute-style reference targets in JSON evidence;
 - never writes into the target repository.
 
 Ignore files are exposure controls, not security sandboxes. Shell tools may bypass platform-specific ignore behavior. Use filesystem permissions and verified fail-closed controls for actual enforcement.
@@ -133,9 +136,9 @@ See [the full evaluation protocol](references/EVALUATION_PROTOCOL.md) and [forwa
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v
-python3 -m compileall -q scripts tests
-python3 /path/to/skill-creator/scripts/quick_validate.py .
+python3 -B -m unittest discover -s tests -v
+python3 -B -m compileall -q scripts tests
+python3 -B /path/to/skill-creator/scripts/quick_validate.py .
 ```
 
 Synthetic fixtures cover healthy, bloated, conflicting, stale, competing-state, thin-adapter, intentionally duplicated, and lightweight non-code repositories. They contain no private source documents.

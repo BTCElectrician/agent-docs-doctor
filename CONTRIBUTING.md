@@ -15,9 +15,9 @@ Agent Docs Doctor is intentionally conservative: deterministic code reports obse
 ## Development loop
 
 ```bash
-python3 -m unittest discover -s tests -v
-python3 -m compileall -q scripts tests
-python3 scripts/agent_docs_doctor.py audit fixtures/healthy-repo --pretty
+python3 -B -m unittest discover -s tests -v
+python3 -B -m compileall -q scripts tests
+python3 -B scripts/agent_docs_doctor.py audit fixtures/healthy-repo --pretty
 ```
 
 Run the current official skill validator against the repository root. If `ruff` is available, run `ruff check scripts tests`.

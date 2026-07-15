@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -61,7 +64,25 @@ class DoctorLibTests(unittest.TestCase):
             self.write(root, "private-status.md", "# Private\n")
             self.write(root, "STATUS.md", "# Current\n")
             paths = [item["path"] for item in build_inventory(root)["files"]]
-        self.assertEqual(paths, ["STATUS.md", "ignored/AGENTS.md"])
+        self.assertEqual(paths, ["STATUS.md"])
+
+    def test_negation_can_restore_file_when_parent_directory_is_not_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".gitignore", "ignored/*\n!ignored/AGENTS.md\n")
+            self.write(root, "ignored/AGENTS.md", "# Restored\n")
+            self.write(root, "ignored/STATUS.md", "# Still ignored\n")
+            paths = [item["path"] for item in build_inventory(root)["files"]]
+        self.assertEqual(paths, ["ignored/AGENTS.md"])
+
+    def test_nested_gitignore_is_applied_to_its_subtree(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "docs/.gitignore", "private/\n")
+            self.write(root, "docs/private/AGENTS.md", "# Private\n")
+            self.write(root, "docs/STATUS.md", "# Public\n")
+            paths = [item["path"] for item in build_inventory(root)["files"]]
+        self.assertEqual(paths, ["docs/STATUS.md"])
 
     def test_secret_like_files_are_never_read(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -91,6 +112,28 @@ class DoctorLibTests(unittest.TestCase):
         self.assertEqual(result["files"], [])
         self.assertEqual(result["skipped"], [{"path": "AGENTS.md", "reason": "symlink escapes audit root"}])
 
+    def test_symlink_to_in_root_secret_is_not_read(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".env", "sentinel-do-not-read\n")
+            (root / "AGENTS.md").symlink_to(root / ".env")
+            result = build_inventory(root)
+            serialized = dump_json(result)
+        self.assertEqual(result["files"], [])
+        self.assertNotIn("sentinel-do-not-read", serialized)
+        self.assertEqual(
+            result["skipped"],
+            [{"path": "AGENTS.md", "reason": "symlink target excluded from audit"}],
+        )
+
+    def test_symlink_to_in_root_agent_doc_is_audited(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "AGENTS.md", "# Shared rules\n")
+            (root / "CLAUDE.md").symlink_to(root / "AGENTS.md")
+            paths = [item["path"] for item in build_inventory(root)["files"]]
+        self.assertEqual(paths, ["AGENTS.md", "CLAUDE.md"])
+
     def test_exact_overlap_across_files(self) -> None:
         block = (
             "Always require explicit approval before deleting production data or changing release controls."
@@ -103,6 +146,8 @@ class DoctorLibTests(unittest.TestCase):
         self.assertEqual(len(result["exact_overlap_groups"]), 1)
         occurrences = result["exact_overlap_groups"][0]["occurrences"]
         self.assertEqual([item["path"] for item in occurrences], ["AGENTS.md", "CLAUDE.md"])
+        self.assertTrue(all("text" not in item for item in occurrences))
+        self.assertNotIn(block, dump_json(result))
 
     def test_short_or_heading_overlap_is_not_reported(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -145,6 +190,32 @@ class DoctorLibTests(unittest.TestCase):
         broken = [item for item in audit["findings"] if item["category"] == "broken-reference"]
         self.assertEqual(len(broken), 1)
         self.assertEqual(broken[0]["evidence"]["target"], "docs/missing.md")
+
+    def test_markdown_titles_and_parenthesized_destinations_resolve(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "docs/guide.md", "# Guide\n")
+            self.write(root, "docs/spec_(draft).md", "# Draft\n")
+            self.write(
+                root,
+                "AGENTS.md",
+                'Read [guide](docs/guide.md "read this") and [draft](docs/spec_(draft).md).\n',
+            )
+            findings = build_audit(root)["findings"]
+        self.assertFalse(any(item["category"] == "broken-reference" for item in findings))
+
+    def test_absolute_style_reference_target_is_sanitized(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            private_target = "/private/tmp/private-user/plan.md"
+            self.write(root, "AGENTS.md", f"Read [plan]({private_target}).\n")
+            result = build_inventory(root)
+            serialized = dump_json(result)
+            reference = result["files"][0]["references"][0]
+        self.assertNotIn(private_target, serialized)
+        self.assertEqual(reference["target"], "<root-relative-path>")
+        self.assertEqual(reference["target_kind"], "root-relative")
+        self.assertIn("target_sha256", reference)
 
     def test_root_relative_reference_resolves_inside_audit_root(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -230,6 +301,88 @@ class DoctorLibTests(unittest.TestCase):
         ]
         self.assertIn("findings[0] has invalid severity", validate_audit(report))
 
+    def test_validator_rejects_incomplete_inventory_and_unhashable_id(self) -> None:
+        incomplete = {
+            "schema_version": "agent-docs-doctor.audit.v1",
+            "mode": "read-only",
+            "inventory": {"schema_version": "agent-docs-doctor.inventory.v1"},
+            "findings": [
+                {
+                    "id": ["not", "hashable"],
+                    "severity": "medium",
+                    "evidence_type": "deterministic",
+                    "category": "test",
+                    "summary": "test",
+                    "locations": [],
+                    "uncertainty": "none",
+                }
+            ],
+            "judgment_queue": [],
+            "limitations": [],
+        }
+        errors = validate_audit(incomplete)
+        self.assertIn("inventory missing files", errors)
+        self.assertIn("findings[0].id must be a non-empty string", errors)
+        completed = subprocess.run(
+            [sys.executable, str(SCRIPTS / "agent_docs_doctor.py"), "validate-report", "-"],
+            input=json.dumps(incomplete),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("id must be a non-empty string", completed.stderr)
+
+    def test_codex_fallback_file_is_discovered_and_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(
+                root,
+                ".codex/config.toml",
+                'project_doc_fallback_filenames = ["GUIDE.md", "SECONDARY.md"]\n',
+            )
+            self.write(root, "GUIDE.md", "# Fallback authority\n")
+            self.write(root, "SECONDARY.md", "# Lower-priority fallback\n")
+            entries = {item["path"]: item for item in build_inventory(root)["files"]}
+        self.assertEqual(entries["GUIDE.md"]["loading"], "automatic")
+        self.assertEqual(entries["SECONDARY.md"]["loading"], "not-loaded")
+
+    def test_ignored_codex_config_is_not_used_for_fallback_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".gitignore", ".codex/\n")
+            self.write(
+                root,
+                ".codex/config.toml",
+                'project_doc_fallback_filenames = ["PRIVATE_GUIDE.md"]\n',
+            )
+            self.write(root, "PRIVATE_GUIDE.md", "# Ignored fallback\n")
+            ignored_config = root / ".codex/config.toml"
+            original_read_text = Path.read_text
+
+            def guarded_read_text(
+                path: Path, encoding: str | None = None, errors: str | None = None
+            ) -> str:
+                if path == ignored_config:
+                    raise AssertionError("ignored config was opened")
+                return original_read_text(path, encoding=encoding, errors=errors)
+
+            with patch.object(Path, "read_text", guarded_read_text):
+                paths = [item["path"] for item in build_inventory(root)["files"]]
+        self.assertNotIn("PRIVATE_GUIDE.md", paths)
+
+    def test_codex_override_selection_and_agent_history_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "AGENTS.override.md", "# Override\n")
+            self.write(root, "AGENTS.md", "# Base\n")
+            self.write(root, "AGENTS_HISTORY.md", "# History\n")
+            entries = {item["path"]: item for item in build_inventory(root)["files"]}
+        self.assertEqual(entries["AGENTS.override.md"]["platforms"], ["codex"])
+        self.assertEqual(entries["AGENTS.md"]["platforms"], ["cursor"])
+        self.assertEqual(entries["AGENTS_HISTORY.md"]["kind"], "reference")
+        self.assertEqual(entries["AGENTS_HISTORY.md"]["loading"], "manual")
+
     def test_cli_from_arbitrary_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as value, tempfile.TemporaryDirectory() as cwd:
             root = Path(value)
@@ -243,6 +396,44 @@ class DoctorLibTests(unittest.TestCase):
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.JSONDecoder().decode(completed.stdout)["mode"], "read-only")
+
+    def test_installed_cli_does_not_create_bytecode_in_target(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            installed_scripts = root / ".agents/skills/agent-docs-doctor/scripts"
+            shutil.copytree(SCRIPTS, installed_scripts, ignore=shutil.ignore_patterns("__pycache__"))
+            self.write(root, ".agents/skills/agent-docs-doctor/SKILL.md", "# Auditor skill\n")
+            self.write(root, ".agents/skills/agent-docs-doctor/STATUS.md", "# Auditor status\n")
+            self.write(root, ".agents/skills/other-skill/SKILL.md", "# Other skill\n")
+            self.write(root, "AGENTS.md", "# Rules\n")
+            self.write(root, "STATUS.md", "# Project status\n")
+            environment = os.environ.copy()
+            environment.pop("PYTHONDONTWRITEBYTECODE", None)
+            completed = subprocess.run(
+                [sys.executable, str(installed_scripts / "agent_docs_doctor.py"), "audit", str(root)],
+                cwd=root,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            report = json.JSONDecoder().decode(completed.stdout)
+            paths = [item["path"] for item in report["inventory"]["files"]]
+            skipped = report["inventory"]["skipped"]
+            bytecode = list(root.rglob("__pycache__")) + list(root.rglob("*.pyc"))
+        self.assertNotIn(".agents/skills/agent-docs-doctor/SKILL.md", paths)
+        self.assertNotIn(".agents/skills/agent-docs-doctor/STATUS.md", paths)
+        self.assertIn(".agents/skills/other-skill/SKILL.md", paths)
+        self.assertIn("STATUS.md", paths)
+        self.assertFalse(any(item["category"] == "competing-current-state" for item in report["findings"]))
+        self.assertIn(
+            {
+                "path": ".agents/skills/agent-docs-doctor",
+                "reason": "auditor's installed package excluded",
+            },
+            skipped,
+        )
+        self.assertEqual(bytecode, [])
 
 
 if __name__ == "__main__":
