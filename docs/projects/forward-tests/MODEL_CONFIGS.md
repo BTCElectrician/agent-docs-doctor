@@ -1,5 +1,21 @@
 # Forward-test model configurations
 
+## `ft-2026-07-16-simple-review-6243003`
+
+- Profile: [`codex-fresh-agent-unpinned`](../../models/profiles/codex-fresh-agent-unpinned.md)
+- Skill commit: `624300385609272fc195065f825bfa51da5500bb`
+- Fixtures: `healthy-repo` and `stale-history`, one fresh agent per fixture
+- Prompt shape: `At commit 6243003, use the Agent Docs Doctor skill in the repository root to audit <fixture>. I am a new user. Tell me what I need to decide. Keep the audit read-only, do not change or create repository files, do not inspect prior evaluation output, and do not delegate.`
+- Context fork: none
+- Expected diagnosis or response format disclosed: no
+- Mutation authority: none
+- Paid service: none
+- Model provenance: Codex collaboration agent; exact model identifier, revision, and reasoning setting were not exposed
+- Result: 2 of 2 passed the simple no-change/actionable decision-review paths
+
+Preliminary uncommitted runs and the superseded `1ee6307` stale-case output are excluded from the
+final count.
+
 ## `ft-2026-07-15-post-fable-03e9d44`
 
 - Profile: [`codex-fresh-agent-unpinned`](../../models/profiles/codex-fresh-agent-unpinned.md)
