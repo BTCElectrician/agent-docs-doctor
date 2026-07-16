@@ -93,6 +93,9 @@ End with one easy reply format:
 Reply with: D1 preview, D2 keep, D3 later — or say “show evidence.”
 ```
 
+Show one choice per decision ID; never present conflicting choices for the same ID in the example
+reply.
+
 `preview` asks for an exact no-write change preview. `keep` rejects the recommendation and
 preserves the current file. `later` defers it. `show evidence` expands the technical basis.
 

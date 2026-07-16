@@ -968,11 +968,13 @@ class DoctorLibTests(unittest.TestCase):
         self.assertIn("Nothing was changed.", skill)
         self.assertIn("no more than seven decision items", skill)
         self.assertIn("D1 preview, D2 keep, D3 later", skill)
+        self.assertIn("one choice per decision ID", skill)
         self.assertIn("Apply this preview", skill)
         self.assertIn("preview` asks for an exact no-write change preview", skill)
 
         self.assertLess(schema.index("## Default response"), schema.index("## Advanced evidence"))
         self.assertIn("**Safe default:**", schema)
+        self.assertIn("Never show `D2 keep, D2 later`", schema)
         self.assertIn("Nothing has been changed yet.", schema)
         self.assertIn("Requesting `preview` in the decision review does not authorize writes", migration)
 
