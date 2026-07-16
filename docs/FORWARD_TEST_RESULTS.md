@@ -6,6 +6,25 @@ Configuration: [`ft-2026-07-15-post-fable-03e9d44`](projects/forward-tests/MODEL
 
 Status: qualitative skill validation, not a pinned-model performance benchmark
 
+## Simple decision-review UX validation
+
+Run date: 2026-07-16
+
+Configuration: [`ft-2026-07-16-simple-review-6243003`](projects/forward-tests/MODEL_CONFIGS.md)
+
+Two fresh Codex collaboration agents used the ordinary new-user prompt against commit
+`624300385609272fc195065f825bfa51da5500bb`. Neither received the expected diagnosis or output
+format, inspected prior evaluation artifacts, delegated, or changed repository files.
+
+| Fixture | Required behavior | Observed behavior | Verdict |
+|---|---|---|---|
+| `healthy-repo` | Avoid inventing work | Reported 0 items, said nothing changed, and told the user no decision was needed | Pass |
+| `stale-history` | Make one real issue easy to decide | Reported one `D1` item, used an owner-confirmed safe default, and offered one `D1 preview` response without authorizing writes | Pass |
+
+Result: **2 of 2 simple-review cases passed.** An earlier committed candidate run showed two
+conflicting reply choices for the same decision ID. That run is superseded, the wording was fixed,
+and both final cases above ran against the corrected commit.
+
 ## Method
 
 Each of the eight public fixtures was audited by a different fresh Codex collaboration agent against
