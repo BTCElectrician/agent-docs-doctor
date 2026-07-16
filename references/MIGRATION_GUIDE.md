@@ -1,10 +1,13 @@
 # Approved migration guide
 
-Use only after explicit user approval identifies the accepted challenger and write scope.
+Use only after the user has reviewed an exact change preview and explicitly authorized applying it.
+Requesting `preview` in the decision review does not authorize writes.
 
 ## Preconditions
 
 - Freeze the incumbent in version control or an immutable review artifact.
+- Confirm the user said **Apply this preview** or gave equally unambiguous approval after seeing the
+  exact paths and operations.
 - Confirm repository root, branch, dirty state, and deployment behavior.
 - Identify every preservation-register item and owner decision.
 - Keep cross-repository edits out of scope unless separately approved.
