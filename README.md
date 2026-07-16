@@ -51,14 +51,41 @@ For Claude Code, place the same folder at `.claude/skills/agent-docs-doctor`. Cu
 Ask the agent client to use the installed Agent Docs Doctor skill:
 
 ```text
-Audit this repository's agent instructions with Agent Docs Doctor and tell me what should change.
+Audit this repository's agent instructions with Agent Docs Doctor. Give me a short decision review
+with safe defaults, and do not change any files.
 ```
 
 Named-skill syntax varies by client; use the client's normal skill invocation when explicit
 selection is needed.
 
-Or run and validate the evidence engine directly. Use a unique temporary file for a ledger you
-want to inspect:
+## What a user gets
+
+The default response is a short review, not a wall of audit data:
+
+```text
+Agent Docs Doctor found 3 items worth reviewing.
+Nothing was changed.
+
+D1 — Old plan is still being referenced
+Recommendation: Fix the reference, then archive the old plan.
+Safe default: Keep it unchanged until an owner confirms the current plan.
+
+D2 — Repeated deployment rule
+Recommendation: Keep both copies because they protect different agent clients.
+
+Reply with: D1 preview, D2 keep — or say “show evidence.”
+```
+
+Choosing `preview` does not edit the repository. It only shows the proposed changes. A separate
+instruction to apply that preview is required before any file changes.
+
+When the review finds nothing actionable, it says so and recommends no change. Technical evidence,
+architecture maps, and the raw deterministic ledger remain available through `show evidence`.
+
+## Advanced: inspect the raw evidence
+
+Run and validate the evidence engine directly when you want the underlying JSON ledger. Use a unique
+temporary file:
 
 ```bash
 audit_report="$(mktemp)"
@@ -82,42 +109,8 @@ When developing this repository itself, shorten the script paths to `scripts/...
 points disable bytecode writes, and `-B` adds an explicit interpreter-level guard. The scripts
 write only to standard output unless your shell redirects it.
 
-## Example inventory
-
-```json
-{
-  "path": ".cursor/rules/frontend.mdc",
-  "kind": "scoped-rule",
-  "platforms": ["cursor"],
-  "loading": "conditional",
-  "role": "procedure",
-  "classification_basis": "filename-and-metadata inference"
-}
-```
-
-## Example finding
-
-```text
-[HIGH] archive-boundary
-Observed: CURRENT_PLAN.md declares status: retired outside an archive-like path.
-Uncertainty: it may be an intentional redirect stub.
-Next: inspect inbound links and preserve migration or rollback invariants before moving it.
-```
-
-Exact evidence does not settle intent. The report must say what is observed, what is inferred, and what needs an owner decision.
-
-## Example challenger
-
-```text
-AGENTS.md                         canonical cross-client invariants
-CLAUDE.md                         @AGENTS.md plus real Claude-only behavior
-.cursor/rules/frontend.mdc        frontend-specific Cursor procedure
-.agents/skills/release/SKILL.md   on-demand release workflow
-STATUS.md                         one short current-state surface
-docs/archive/                     retired history with repaired inbound links
-```
-
-That tree is a proposal, not a universal standard. A real audit includes an incumbent-to-challenger traceability table and keeps the incumbent unchanged until approval and evaluation.
+Exact evidence does not settle intent. The review separates what was observed, what was inferred,
+and what still needs an owner decision.
 
 ## Read-only and safety model
 

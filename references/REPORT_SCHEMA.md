@@ -1,21 +1,83 @@
-# Report schema
+# Human report contract
 
-Produce a concise Markdown report backed by the deterministic JSON ledger.
+Produce a plain-language decision review backed by the deterministic JSON ledger. The user should
+be able to respond without understanding the engine or agent-document architecture.
 
-## Required sections
+## Default response
 
-1. **Scope and mode** — repository root, exclusions, read-only status, client versions if known.
-2. **Executive diagnosis** — top safety and authority findings; avoid a numeric health score.
-3. **Architecture map** — path, consumer, scope, loading, role, confidence.
-4. **Evidence ledger** — findings ordered by severity, each following the audit rubric.
-5. **Preservation register** — rules that must survive any redesign.
-6. **Recommendations** — keep, tighten, consolidate, pointer, scoped rule, skill, executable control, current state, reference, archive, human decision, or no change.
-7. **Challenger** — proposed tree and authority hierarchy; never overwrite the incumbent by default.
-8. **Traceability** — every incumbent rule mapped to challenger, retained incumbent, or owner decision.
-9. **Evaluation plan** — frozen tasks, measures, contamination controls, and adoption gate.
-10. **Limitations and approval boundary** — skipped files, inference, unresolved ownership, and actions requiring approval.
+Start with:
 
-## Finding template
+```text
+Agent Docs Doctor found N items worth reviewing.
+Nothing was changed.
+```
+
+For no actionable items, say `No changes are recommended. Nothing was changed.` and stop after a
+short summary.
+
+Otherwise show at most seven items, ordered by safety and likely impact:
+
+```markdown
+### D1 — Old plan is still being referenced
+
+`CURRENT_PLAN.md` and `AGENTS.md`
+
+**What I found:** The plan says it is retired, but agents are still told to read it.
+**Recommendation:** Fix the reference, then archive the old plan.
+**Safe default:** Keep both files unchanged until an owner confirms the current plan.
+```
+
+Use these user-facing recommendation verbs:
+
+- **Keep** — leave it unchanged.
+- **Fix** — repair a link, label, scope, or loading problem.
+- **Clarify** — make ownership or intent explicit.
+- **Combine** — reduce competing editable copies while preserving every rule.
+- **Archive later** — move history only after references and preservation needs are resolved.
+- **Ask an owner** — do not guess when history or risk is unknown.
+
+End with:
+
+```text
+Reply with: D1 preview, D2 keep, D3 later — or say “show evidence.”
+Nothing will be changed until you review a separate change preview and explicitly approve it.
+```
+
+`preview` asks for an exact no-write change preview. `keep` preserves the current file. `later`
+defers the decision. `show evidence` expands the technical report.
+
+## Change preview
+
+After the user chooses items, restate each choice. For every requested preview show:
+
+- exact paths and operations;
+- text or safeguards that must survive;
+- references that will be repaired;
+- validation and rollback steps; and
+- unresolved uncertainty.
+
+End the preview with `Nothing has been changed yet.` Only an explicit instruction to **Apply this
+preview**, or an equally unambiguous approval after the preview, authorizes writes.
+
+## Advanced evidence
+
+Show this detail only when the user asks for evidence, when a critical item requires immediate
+context, or when preparing a change preview:
+
+1. scope and read-only mode;
+2. architecture map with path, consumer, scope, loading, role, and confidence;
+3. evidence ledger ordered by severity;
+4. preservation register;
+5. internal recommendation classes;
+6. proposed future tree when useful;
+7. incumbent-to-future traceability;
+8. evaluation plan; and
+9. limitations and approval boundary.
+
+Do not hide critical evidence behind the simple view. State the danger plainly in the first decision
+item and use **Keep** or **Ask an owner** as the safe default.
+
+## Detailed finding template
 
 ```markdown
 ### [HIGH] authority-001 — Retired plan still claims current authority

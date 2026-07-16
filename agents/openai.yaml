@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Docs Doctor"
-  short_description: "Audit and improve agent-facing repository docs"
-  default_prompt: "Use $agent-docs-doctor to audit the repository agent instructions and recommend safe, evidence-backed improvements."
+  short_description: "Simple, safe reviews of agent-facing repo docs"
+  default_prompt: "Use $agent-docs-doctor to audit this repository’s agent instructions, give me a short decision review with safe defaults, and do not change files."

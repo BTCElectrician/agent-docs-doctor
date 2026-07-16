@@ -40,4 +40,7 @@ For a new deterministic finding:
 
 For a new recommendation heuristic, keep it in the skill or rubric rather than disguising it as deterministic code.
 
+For a human-report change, preserve the short decision review, stable decision IDs, safe defaults,
+and two-step approval boundary. Keep advanced evidence available without making it the default.
+
 By contributing, you agree that your contribution is licensed under Apache License 2.0.

@@ -958,6 +958,28 @@ class DoctorLibTests(unittest.TestCase):
         self.assertNotIn("/tmp/agent-docs-audit.json", public_workflow)
         self.assertNotIn("-m compileall", public_workflow)
 
+    def test_default_human_review_is_simple_and_requires_preview_approval(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        schema = (ROOT / "references/REPORT_SCHEMA.md").read_text(encoding="utf-8")
+        migration = (ROOT / "references/MIGRATION_GUIDE.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        metadata = (ROOT / "agents/openai.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("Nothing was changed.", skill)
+        self.assertIn("no more than seven decision items", skill)
+        self.assertIn("D1 preview, D2 keep, D3 later", skill)
+        self.assertIn("Apply this preview", skill)
+        self.assertIn("preview` asks for an exact no-write change preview", skill)
+
+        self.assertLess(schema.index("## Default response"), schema.index("## Advanced evidence"))
+        self.assertIn("**Safe default:**", schema)
+        self.assertIn("Nothing has been changed yet.", schema)
+        self.assertIn("Requesting `preview` in the decision review does not authorize writes", migration)
+
+        self.assertIn("## What a user gets", readme)
+        self.assertIn("short decision review with safe defaults", metadata)
+        self.assertIn("do not change files", metadata)
+
 
 if __name__ == "__main__":
     unittest.main()
