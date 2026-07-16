@@ -169,7 +169,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing discovery rules or repor
 
 ## Maturity and license
 
-Status: **public initial release**. The deterministic core, synthetic fixture suite, independent
-Fable review reconciliation, and fresh eight-case behavioral acceptance record are complete.
+Status: **public initial release**. The deterministic core, synthetic fixture suite, hardened safety
+boundaries, and fresh behavioral acceptance records are complete.
 
 Licensed under [Apache License 2.0](LICENSE).

@@ -1,10 +1,10 @@
-# Codex fresh agent, unpinned
+# Fresh evaluation agent, unpinned
 
 - Status: Experimental
-- Consumer: Codex desktop fresh subagent
+- Consumer: isolated evaluation-agent runtime
 - First used: 2026-07-15
-- Exact model ID: not exposed by the product runtime
-- Reasoning setting: not exposed
+- Provider and exact model ID: not published
+- Reasoning setting: not published
 - Network research: not needed during fixture forward tests
 - Paid API call: no
 - Repository mutation: forbidden by prompt

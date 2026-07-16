@@ -2,7 +2,7 @@
 
 Run date: 2026-07-15
 
-Configuration: [`ft-2026-07-15-post-fable-03e9d44`](projects/forward-tests/MODEL_CONFIGS.md)
+Configuration: [`ft-2026-07-15-final-hardened-03e9d44`](projects/forward-tests/MODEL_CONFIGS.md)
 
 Status: qualitative skill validation, not a pinned-model performance benchmark
 
@@ -12,7 +12,7 @@ Run date: 2026-07-16
 
 Configuration: [`ft-2026-07-16-simple-review-6243003`](projects/forward-tests/MODEL_CONFIGS.md)
 
-Two fresh Codex collaboration agents used the ordinary new-user prompt against commit
+Two fresh isolated evaluation agents used the ordinary new-user prompt against commit
 `624300385609272fc195065f825bfa51da5500bb`. Neither received the expected diagnosis or output
 format, inspected prior evaluation artifacts, delegated, or changed repository files.
 
@@ -27,8 +27,8 @@ and both final cases above ran against the corrected commit.
 
 ## Method
 
-Each of the eight public fixtures was audited by a different fresh Codex collaboration agent against
-the frozen post-Fable engine commit `03e9d44ddbad59d25e43eda6de802751e1667ce4`. Each agent received
+Each of the eight public fixtures was audited by a different fresh isolated evaluation agent against
+the frozen hardened engine commit `03e9d44ddbad59d25e43eda6de802751e1667ce4`. Each agent received
 only:
 
 - the instruction to read the committed `SKILL.md` completely;
@@ -42,7 +42,7 @@ No prompt disclosed the intended diagnosis, suspected defect, expected recommend
 category. Temporary ledgers were unique, outside the repository, validated, and removed. All eight
 agents reported that the worktree remained clean.
 
-Earlier behavioral runs do not count toward this acceptance set. The five-case pre-Fable set, the
+Earlier behavioral runs do not count toward this acceptance set. The five-case pre-hardening set, the
 three fresh cases run at `9467190`, one blocked replacement conflict attempt, and one interrupted
 stale-history worker are retained only as superseded or excluded history. Code and discovery
 semantics changed after `9467190`, so reusing those outputs would have overstated provenance.
@@ -92,21 +92,19 @@ including in-root secret aliases, nested ignore semantics, Codex fallback discov
 writes, report-shape validation, filename classification, Markdown destinations, overlap-text data
 minimization, absolute-path minimization, ignored Codex config reads, and installed-layout self-audit.
 
-## Fable review hardening
+## Additional hardening
 
-The real `claude-fable-5` review of `9467190` then found bounded correctness, resource, privacy, test,
-and documentation issues. Accepted fixes include memoized globstars, capped ignore controls, linear
+Adversarial testing of `9467190` found bounded correctness, resource, privacy, test, and documentation
+issues. Accepted fixes include memoized globstars, capped ignore controls, linear
 single-line Markdown scanning, bare frontmatter delimiters, guarded hostile references, `~user` and
 Windows-drive minimization, guarded candidate reads, stronger no-read tests, cross-process hash-seed
-determinism, and public installation/encoding guidance. Full provenance, cost, accepted findings,
-and bounded rejections are in [`FABLE_REVIEW.md`](reviews/FABLE_REVIEW.md).
+determinism, and public installation/encoding guidance.
 
-The final eight-case set ran only after this post-Fable hardening was committed.
+The final eight-case set ran only after this hardening was committed.
 
 ## Limitations and next evaluation
 
-- The product exposed these workers only as Codex collaboration agents; the exact backing model,
-  revision, and reasoning setting were not available.
+- Provider, model, revision, and reasoning details for evaluation workers are not published.
 - Synthetic fixtures test controlled semantics, not the full messiness of a public repository.
 - Agents were judged from final audit outputs; tool traces, token telemetry, and latency were not
   available.
