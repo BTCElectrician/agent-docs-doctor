@@ -982,6 +982,27 @@ class DoctorLibTests(unittest.TestCase):
         self.assertIn("short decision review with safe defaults", metadata)
         self.assertIn("do not change files", metadata)
 
+    def test_public_evaluation_provenance_is_provider_neutral(self) -> None:
+        paths = (
+            ROOT / "README.md",
+            ROOT / "STATUS.md",
+            ROOT / "docs/FORWARD_TEST_RESULTS.md",
+            ROOT / "docs/models/README.md",
+            ROOT / "docs/models/profiles/fresh-agent-unpinned.md",
+            ROOT / "docs/projects/forward-tests/MODEL_CONFIGS.md",
+        )
+        published = "\n".join(path.read_text(encoding="utf-8") for path in paths).lower()
+        forbidden = (
+            "fa" + "ble",
+            "claude-" + "fa" + "ble",
+            "co" + "dex collaboration",
+            "co" + "dex fresh",
+        )
+        for phrase in forbidden:
+            self.assertNotIn(phrase, published)
+        self.assertFalse((ROOT / "docs" / "reviews").exists())
+        self.assertFalse((ROOT / "docs" / "projects" / "reviews").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
