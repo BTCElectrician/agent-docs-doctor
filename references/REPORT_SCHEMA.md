@@ -43,6 +43,9 @@ Reply with: D1 preview, D2 keep, D3 later — or say “show evidence.”
 Nothing will be changed until you review a separate change preview and explicitly approve it.
 ```
 
+Use exactly one choice per decision ID in the example reply. Never show `D2 keep, D2 later` as if
+both should be sent.
+
 `preview` asks for an exact no-write change preview. `keep` preserves the current file. `later`
 defers the decision. `show evidence` expands the technical report.
 
