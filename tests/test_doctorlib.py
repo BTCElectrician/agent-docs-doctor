@@ -417,9 +417,12 @@ class DoctorLibTests(unittest.TestCase):
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO support required")
     def test_non_regular_candidate_is_skipped_without_blocking(self) -> None:
+        mkfifo = getattr(os, "mkfifo", None)
+        if not callable(mkfifo):
+            self.skipTest("POSIX FIFO support required")
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
-            os.mkfifo(root / "AGENTS.md")
+            mkfifo(root / "AGENTS.md")
             completed = subprocess.run(
                 [sys.executable, str(SCRIPTS / "agent_docs_doctor.py"), "inventory", str(root)],
                 check=False,
