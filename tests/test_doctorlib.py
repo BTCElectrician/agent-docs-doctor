@@ -971,6 +971,14 @@ class DoctorLibTests(unittest.TestCase):
                 lambda item: item["inventory"]["coverage"]["limits"].__setitem__("future_limit", "many"),
                 "inventory.coverage.limits.future_limit must be a positive integer",
             ),
+            (
+                lambda item: item["engine"]["configuration"].__setitem__(1, 1),
+                "engine.configuration keys must be strings",
+            ),
+            (
+                lambda item: item["inventory"]["coverage"]["limits"].__setitem__(1, 1),
+                "inventory.coverage.limits keys must be strings",
+            ),
         )
         for mutate, expected in cases:
             with self.subTest(expected=expected):
