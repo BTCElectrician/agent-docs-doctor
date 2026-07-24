@@ -617,6 +617,9 @@ def markdown_destination(payload: str) -> str:
 
 
 def sanitized_reference_target(target: str) -> tuple[str, str | None, str]:
+    if "\x00" in target:
+        digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
+        return "<invalid-filesystem-path>", digest, "invalid-filesystem"
     if re.match(r"^[A-Za-z]:[\\/]", target):
         digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
         return "<absolute-filesystem-path>", digest, "absolute-filesystem"
@@ -642,7 +645,7 @@ def _reference_candidate(
     """
 
     _, _, target_kind = sanitized_reference_target(target)
-    if target_kind == "absolute-filesystem":
+    if target_kind in {"absolute-filesystem", "invalid-filesystem"}:
         return None, None, False, None
     if target_kind == "relative" and re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE):
         return None, None, None, None
