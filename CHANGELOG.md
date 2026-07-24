@@ -31,5 +31,6 @@
 - Escaped leading `#` and `!` Git-ignore patterns retain their literal meaning, preventing ignored
   agent-document names from entering the read set.
 - Windows drive, UNC, home-style, and current-drive-rooted references are privacy-minimized.
+- Invalid filesystem references are privacy-minimized before platform path resolution.
 - Standalone validation now matches the published positive-integer contract for additive engine
   configuration and coverage-limit fields.
