@@ -1,5 +1,40 @@
 # Forward-test results
 
+## Final packaged 0.2.0 acceptance
+
+Run date: 2026-07-24
+
+Configuration:
+[`ft-2026-07-24-final-0.2.0-d35f94f`](projects/forward-tests/MODEL_CONFIGS.md)
+
+Two new context-isolated evaluation agents independently used the committed skill and CLI against
+all eight public fixtures at `d35f94f9ee4d6d96536bfff9952cf8d05d8080e3`. Each received four raw
+fixture paths, no expected diagnosis, no prior-result access, no mutation authority, and no
+delegation authority. The bare console command was not globally installed in their fresh shells,
+so they were given the repository environment's existing installed `agent-docs-doctor 0.2.0`
+entry point; no expected behavior or fixture description was added.
+
+| Fixture | Observed behavior | Safe default | Verdict |
+|---|---|---|---|
+| `healthy-repo` | Found no defect across root authority, current state, and API scope | Keep unchanged | Pass |
+| `stale-history` | Connected an automatic “current plan” reference to explicit retired metadata and required owner confirmation | Keep both files and pause reliance on the retired plan | Pass |
+| `conflicting-rules` | Identified the semantic deployment-approval conflict without mislabeling it deterministic | Require approval until an owner resolves scope | Pass |
+| `bloated-repo` | Separated two overlap signals and preserved the cross-client production and verification safeguards | Keep every copy until loading equivalence is demonstrated | Pass |
+| `competing-status` | Presented one ownership decision for three compatible but insufficiently connected state surfaces | Keep all three until scopes are confirmed | Pass |
+| `intentional-duplication` | Recognized independently exported privacy repetition and recommended no change | Keep both copies | Pass |
+| `lightweight-workspace` | Avoided inventing skills, hooks, consolidation, or other work | Keep unchanged | Pass |
+| `thin-adapters` | Correctly mapped the Claude import and conditional Cursor rule and recommended no change | Keep unchanged | Pass |
+
+Result: **8 of 8 cases passed.** Both agents verified the exact code commit and unchanged tracked
+code state before and after. The four in-progress evidence documents already modified by the
+coordinating session were neither read nor changed. Neither agent wrote repository files,
+recommended deletion, authorized a deployment, or proposed automatic remediation.
+
+The otherwise successful fresh sets at `9f599c1` and `08b9d30` are excluded because later
+independent reviews found release-relevant safety and correctness defects. Those defects were
+reproduced and fixed before `d35f94f`; this final set does not reuse the earlier contexts or
+outputs. The `c4b49a8` set below remains superseded for the same provenance reason.
+
 ## Pre-final packaged 0.2.0 snapshot
 
 Run date: 2026-07-24
@@ -29,10 +64,9 @@ globally installed in their fresh shell, which is expected before following the 
 or `uv tool install` path; the repository environment's installed `0.2.0` entry point passed
 `doctor` and all fixture audits.
 
-This run is retained as pre-final evidence. It is superseded for release acceptance because the
-subsequent independent code review changed ignore-marker handling, installer path-state checks,
-validator strictness, and the declared build-backend floor. A new post-fix set is required before
-release.
+This run is retained as pre-final evidence. It is superseded for release acceptance because
+subsequent independent reviews changed ignore handling, installer path-state and backup checks,
+reference privacy, validator strictness, glob matching, and the declared build-backend floor.
 
 ## Historical acceptance records
 

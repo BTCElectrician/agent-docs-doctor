@@ -4,9 +4,9 @@ Last updated: 2026-07-24
 
 ## Current state
 
-The `0.2.0` code-side release candidate is implemented on local `main`. Four evidence-backed
-post-review fixes have been applied after the initial packaging commit and are awaiting the final
-commit and fresh behavioral acceptance.
+The `0.2.0` code-side release candidate is implemented and locally accepted on `main`. Three
+independent code-review passes produced ten evidence-backed release findings after the initial
+packaging commit; every confirmed issue was reproduced, fixed, and covered by regression tests.
 
 It now provides:
 
@@ -38,20 +38,19 @@ publish launch messaging or media.
 
 ## Acceptance evidence
 
-- 86 unit and fixture tests pass; one Windows-only junction test is skipped on macOS and is covered
+- 88 unit and fixture tests pass; one Windows-only junction test is skipped on macOS and is covered
   by the hosted Windows matrix.
 - Ruff, Pyright, cache-free syntax checks, both report-validator paths, the official skill
   validator, JSON Schema validation, cross-hash-seed determinism, no-write comparison, UBS, public
   safety scanning, package build, and isolated wheel installation pass.
-- A fresh read-only review reproduced and fixed one hosted-CI configuration defect before the
-  snapshot was frozen.
-- Fresh contamination-free behavior checks passed all eight public fixtures at `c4b49a8`; no
-  evaluator attempted a write or recommended destructive action. That set is recorded as
-  superseded because the later fixes changed engine and installer behavior.
+- The final fresh contamination-free behavior set passed all eight public fixtures at
+  `d35f94f9ee4d6d96536bfff9952cf8d05d8080e3`; no evaluator wrote repository files, recommended
+  deletion, authorized a deployment, or proposed automatic remediation.
+- Earlier successful sets at `c4b49a8`, `9f599c1`, and `08b9d30` are retained only as superseded
+  evidence because later fixes changed engine, installer, or validator behavior.
 
-Remaining code-side closeout is to commit the reproduced fixes, run a new fresh eight-fixture set
-against that commit, record the final evidence, rerun release gates, push clean `main`, and verify
-the hosted CI matrix.
+Every push to `main` runs the hosted Linux, macOS, and Windows matrix. The detailed local commands,
+evaluation provenance, and limitations are recorded in the linked repository documents.
 
 The detailed scope and deferred launch work are tracked in
 [`docs/WORLD_CLASS_PRODUCT_PLAN.md`](docs/WORLD_CLASS_PRODUCT_PLAN.md).
