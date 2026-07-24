@@ -193,7 +193,7 @@ class DoctorLibTests(unittest.TestCase):
         code = (
             "import sys; sys.path.insert(0, 'scripts'); "
             "from doctorlib import path_pattern_matches; "
-            "n=40; path='/'.join(['x']*n); "
+            "n=1200; path='/'.join(['x']*n); "
             "pattern='/'.join(['**']*n+['missing']); "
             "assert not path_pattern_matches(path, pattern)"
         )
@@ -233,6 +233,18 @@ class DoctorLibTests(unittest.TestCase):
             rules = "".join(f"ignored-{index}\n" for index in range(MAX_IGNORE_RULES + 1))
             self.write(root, ".gitignore", rules)
             with self.assertRaisesRegex(ValueError, "rule limit"):
+                build_inventory(root)
+
+    def test_ignore_rule_limit_is_aggregate_across_nested_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            first_count = MAX_IGNORE_RULES // 2 + 1
+            root_rules = "".join(f"root-{index}\n" for index in range(first_count))
+            nested_rules = "".join(f"nested-{index}\n" for index in range(MAX_IGNORE_RULES - first_count + 1))
+            self.write(root, ".gitignore", root_rules)
+            self.write(root, "docs/.gitignore", nested_rules)
+            self.write(root, "docs/AGENTS.md", "# Rules\n")
+            with self.assertRaisesRegex(ValueError, "aggregate.*rule limit"):
                 build_inventory(root)
 
     def test_root_ignore_symlink_is_not_opened(self) -> None:
@@ -671,7 +683,11 @@ class DoctorLibTests(unittest.TestCase):
         self.assertFalse(any(item["category"] == "broken-reference" for item in report["findings"]))
 
     def test_named_home_and_windows_drive_references_are_sanitized(self) -> None:
-        private_targets = ("~someone/private/plan.md", "C:/example/private-plan.md")
+        private_targets = (
+            "~someone/private/plan.md",
+            "C:/example/private-plan.md",
+            r"\Users\alice\private-plan.md",
+        )
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
             self.write(
@@ -682,7 +698,7 @@ class DoctorLibTests(unittest.TestCase):
             result = build_inventory(root)
             serialized = dump_json(result)
             references = result["files"][0]["references"]
-        self.assertEqual(len(references), 2)
+        self.assertEqual(len(references), len(private_targets))
         self.assertTrue(all(item["target"] == "<absolute-filesystem-path>" for item in references))
         self.assertTrue(all(item["target_kind"] == "absolute-filesystem" for item in references))
         self.assertTrue(all(not item["inside_root"] for item in references))
@@ -946,6 +962,14 @@ class DoctorLibTests(unittest.TestCase):
             (
                 lambda item: item["engine"]["configuration"].__setitem__("max_read_bytes", 0),
                 "engine.configuration.max_read_bytes must be a positive integer",
+            ),
+            (
+                lambda item: item["engine"]["configuration"].__setitem__("future_limit", "many"),
+                "engine.configuration.future_limit must be a positive integer",
+            ),
+            (
+                lambda item: item["inventory"]["coverage"]["limits"].__setitem__("future_limit", "many"),
+                "inventory.coverage.limits.future_limit must be a positive integer",
             ),
         )
         for mutate, expected in cases:
@@ -1240,6 +1264,26 @@ class DoctorLibTests(unittest.TestCase):
             (installed.target / "SKILL.md").write_text("# Locally changed\n", encoding="utf-8")
             changed = plan_install("claude", home=home)
             self.assertEqual(changed.state, "update-required")
+
+    def test_skill_installer_rejects_unsafe_manifest_version(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            home = Path(value)
+            installed = apply_install(plan_install("cursor", home=home))
+            manifest_path = installed.target / MANIFEST_NAME
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["version"] = r"x\..\..\..\Documents\escaped"
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            update = plan_install("cursor", home=home, update=True)
+            uninstall = plan_uninstall("cursor", home=home)
+
+        self.assertEqual(update.state, "blocked-unmanaged")
+        self.assertIsNone(update.backup)
+        self.assertEqual(uninstall.state, "blocked-unmanaged")
+        self.assertIsNone(uninstall.backup)
 
     def test_skill_update_is_atomic_and_preserves_previous_version(self) -> None:
         with tempfile.TemporaryDirectory() as value:
