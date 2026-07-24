@@ -155,9 +155,14 @@ class IgnoreMatcher:
             ) from exc
         for raw in lines:
             line = raw.strip()
-            if not line or line.startswith("#"):
+            if not line:
                 continue
-            negate = line.startswith("!")
+            escaped_marker = line.startswith(("\\#", "\\!"))
+            if escaped_marker:
+                line = line[1:]
+            elif line.startswith("#"):
+                continue
+            negate = not escaped_marker and line.startswith("!")
             if negate:
                 line = line[1:]
             anchored = line.startswith("/")
@@ -1233,6 +1238,8 @@ def validate_audit(data: Any) -> list[str]:
                             errors.append(f"{prefix} missing {key}")
                         if not isinstance(reference.get("target"), str):
                             errors.append(f"{prefix}.target must be a string")
+                        if not isinstance(reference.get("target_kind"), str):
+                            errors.append(f"{prefix}.target_kind must be a string")
                         if current and reference.get("edge_type") not in {
                             "markdown-link",
                             "automatic-import",
@@ -1295,6 +1302,8 @@ def validate_audit(data: Any) -> list[str]:
                 if not isinstance(occurrences, list):
                     errors.append(f"{prefix}.occurrences must be an array")
                     continue
+                if current and len(occurrences) < 2:
+                    errors.append(f"{prefix}.occurrences must contain at least two items")
                 for occurrence_index, occurrence in enumerate(occurrences):
                     occurrence_prefix = f"{prefix}.occurrences[{occurrence_index}]"
                     if not isinstance(occurrence, dict):

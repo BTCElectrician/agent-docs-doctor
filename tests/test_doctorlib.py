@@ -126,6 +126,23 @@ class DoctorLibTests(unittest.TestCase):
             paths = [item["path"] for item in build_inventory(root)["files"]]
         self.assertEqual(paths, ["STATUS.md"])
 
+    def test_escaped_gitignore_markers_exclude_literal_candidate_names(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".gitignore", "\\#STATUS.md\n\\!STATUS.md\n")
+            ignored_hash = self.write(root, "#STATUS.md", "# Ignored hash marker\n")
+            ignored_bang = self.write(root, "!STATUS.md", "# Ignored bang marker\n")
+            original_read_bytes = Path.read_bytes
+
+            def guarded_read_bytes(path: Path) -> bytes:
+                if path in {ignored_hash, ignored_bang}:
+                    raise AssertionError("Git-ignored candidate was opened")
+                return original_read_bytes(path)
+
+            with patch.object(Path, "read_bytes", guarded_read_bytes):
+                result = build_inventory(root)
+        self.assertEqual(result["files"], [])
+
     def test_negation_can_restore_file_when_parent_directory_is_not_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -897,10 +914,18 @@ class DoctorLibTests(unittest.TestCase):
                 "references[0].line must be a positive integer",
             ),
             (
+                lambda item: item["inventory"]["files"][0]["references"][0].__setitem__("target_kind", 7),
+                "references[0].target_kind must be a string",
+            ),
+            (
                 lambda item: item["inventory"]["exact_overlap_groups"][0]["occurrences"][0].__setitem__(
                     "sha256", "0" * 64
                 ),
                 "sha256 must match its group",
+            ),
+            (
+                lambda item: item["inventory"]["exact_overlap_groups"][0].__setitem__("occurrences", []),
+                "occurrences must contain at least two items",
             ),
             (
                 lambda item: item["inventory"].__setitem__("skipped", [{"path": "x", "reason": None}]),
@@ -1176,6 +1201,26 @@ class DoctorLibTests(unittest.TestCase):
         self.assertEqual(preview.state, "blocked-unmanaged")
         self.assertIn("not owned", preview.message)
 
+    def test_skill_installer_treats_dangling_symlink_as_unmanaged_and_rechecks_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            home = Path(value)
+            target = target_for("codex", home)
+            target.parent.mkdir(parents=True)
+            self.symlink(target, home / "missing-user-target", target_is_directory=True)
+            preview = plan_install("codex", home=home)
+            self.assertEqual(preview.state, "blocked-unmanaged")
+            self.assertTrue(target.is_symlink())
+
+        with tempfile.TemporaryDirectory() as value:
+            home = Path(value)
+            preview = plan_install("codex", home=home)
+            target = target_for("codex", home)
+            target.parent.mkdir(parents=True)
+            self.symlink(target, home / "appeared-after-preview", target_is_directory=True)
+            with self.assertRaisesRegex(OSError, "changed after preview"):
+                apply_install(preview)
+            self.assertTrue(target.is_symlink())
+
     def test_skill_installer_requires_valid_ownership_manifest_and_matching_files(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             home = Path(value)
@@ -1343,6 +1388,7 @@ class DoctorLibTests(unittest.TestCase):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('agent-docs-doctor = "agent_docs_doctor.cli:main"', pyproject)
         self.assertIn('"share/agent-docs-doctor/skill"', pyproject)
+        self.assertIn('requires = ["setuptools>=77.0.3"]', pyproject)
 
 
 if __name__ == "__main__":

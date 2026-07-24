@@ -68,5 +68,10 @@ jobs:
       - name: Public safety scan
         run: python -B scripts/public_safety_scan.py .
 
+      - name: Minimum build backend
+        run: |
+          python -m pip install "setuptools==77.0.3" wheel
+          python -m pip wheel . --no-build-isolation --no-deps --wheel-dir "${{ runner.temp }}/minimum-backend-wheel"
+
       - name: Build wheel and source distribution outside the checkout
         run: python -m build --outdir "${{ runner.temp }}/agent-docs-doctor-dist"

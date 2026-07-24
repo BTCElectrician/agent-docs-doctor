@@ -138,6 +138,16 @@ def _manifest_sha256(target: Path) -> str | None:
         return None
 
 
+def _path_entry_exists(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def _installed_files_match(target: Path, manifest: dict[str, Any]) -> bool:
     for relative, digest in manifest["files"].items():
         path = target / relative
@@ -158,7 +168,7 @@ def _backup_path(home: Path, client: str, target: Path) -> Path:
     base = parent / f"{SKILL_NAME}-{version}-{fingerprint}"
     candidate = base
     suffix = 2
-    while candidate.exists():
+    while _path_entry_exists(candidate):
         candidate = parent / f"{base.name}-{suffix}"
         suffix += 1
     return candidate
@@ -180,7 +190,7 @@ def plan_install(
     target = target_for(client, actual_home)
     desired = _desired_manifest(client)
     files = tuple(desired["files"])
-    if not target.exists():
+    if not _path_entry_exists(target):
         return InstallPlan("install", client, target, "ready", files)
     current = _read_manifest(target, client)
     if current is None:
@@ -248,7 +258,12 @@ def apply_install(plan: InstallPlan) -> InstallPlan:
     moved_existing = False
     try:
         _write_staged_skill(stage, plan.client)
-        if target.exists():
+        target_exists = _path_entry_exists(target)
+        if plan.action == "install" and target_exists:
+            raise OSError("installation target changed after preview; preview again")
+        if plan.action == "update":
+            if not target_exists:
+                raise OSError("managed installation changed after preview; preview again")
             if plan.backup is None:
                 raise OSError("update has no backup destination")
             if _manifest_sha256(target) != plan.expected_manifest_sha256:
@@ -258,7 +273,7 @@ def apply_install(plan: InstallPlan) -> InstallPlan:
             moved_existing = True
         os.replace(stage, target)
     except Exception:
-        if moved_existing and plan.backup is not None and not target.exists():
+        if moved_existing and plan.backup is not None and not _path_entry_exists(target):
             os.replace(plan.backup, target)
         if stage.exists():
             shutil.rmtree(stage)
@@ -278,7 +293,7 @@ def apply_install(plan: InstallPlan) -> InstallPlan:
 def plan_uninstall(client: str, *, home: Path | None = None) -> InstallPlan:
     actual_home = home or Path.home()
     target = target_for(client, actual_home)
-    if not target.exists():
+    if not _path_entry_exists(target):
         return InstallPlan("uninstall", client, target, "not-installed", ())
     manifest = _read_manifest(target, client)
     if manifest is None:

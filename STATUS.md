@@ -4,7 +4,9 @@ Last updated: 2026-07-24
 
 ## Current state
 
-The `0.2.0` code-side release candidate is implemented locally on `main`.
+The `0.2.0` code-side release candidate is implemented on local `main`. Four evidence-backed
+post-review fixes have been applied after the initial packaging commit and are awaiting the final
+commit and fresh behavioral acceptance.
 
 It now provides:
 
@@ -34,11 +36,22 @@ The public repository is <https://github.com/BTCElectrician/agent-docs-doctor>. 
 closeout does not create a tag or GitHub release, publish to PyPI, change social metadata, or
 publish launch messaging or media.
 
-## Remaining acceptance work
+## Acceptance evidence
 
-- Run the complete local release gate on the final source state.
-- Complete fresh read-only adversarial and eight-fixture behavioral checks.
-- Record those results, commit the final evidence, push clean `main`, and verify the hosted CI run.
+- 86 unit and fixture tests pass; one Windows-only junction test is skipped on macOS and is covered
+  by the hosted Windows matrix.
+- Ruff, Pyright, cache-free syntax checks, both report-validator paths, the official skill
+  validator, JSON Schema validation, cross-hash-seed determinism, no-write comparison, UBS, public
+  safety scanning, package build, and isolated wheel installation pass.
+- A fresh read-only review reproduced and fixed one hosted-CI configuration defect before the
+  snapshot was frozen.
+- Fresh contamination-free behavior checks passed all eight public fixtures at `c4b49a8`; no
+  evaluator attempted a write or recommended destructive action. That set is recorded as
+  superseded because the later fixes changed engine and installer behavior.
+
+Remaining code-side closeout is to commit the reproduced fixes, run a new fresh eight-fixture set
+against that commit, record the final evidence, rerun release gates, push clean `main`, and verify
+the hosted CI matrix.
 
 The detailed scope and deferred launch work are tracked in
 [`docs/WORLD_CLASS_PRODUCT_PLAN.md`](docs/WORLD_CLASS_PRODUCT_PLAN.md).

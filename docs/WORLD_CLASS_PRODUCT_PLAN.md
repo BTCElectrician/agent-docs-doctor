@@ -68,7 +68,7 @@ Every release must retain these invariants:
 
 The current release has strong foundations:
 
-- 84 unit and fixture tests in the current release candidate;
+- 86 unit and fixture tests in the current release candidate;
 - an 8-of-8 qualitative fixture acceptance set;
 - a two-step preview/apply boundary;
 - deterministic relative-path JSON with explicit limitations;

@@ -23,3 +23,7 @@
   and out-of-root dispositions without being opened.
 - Candidate count, aggregate bytes, file bytes, import depth, and ignore controls are bounded.
 - User-level updates and uninstall preserve the previous skill in a reversible backup.
+- Dangling or newly appeared user-level skill paths are treated as unmanaged and are never
+  replaced after a clean preview.
+- Escaped leading `#` and `!` Git-ignore patterns retain their literal meaning, preventing ignored
+  agent-document names from entering the read set.

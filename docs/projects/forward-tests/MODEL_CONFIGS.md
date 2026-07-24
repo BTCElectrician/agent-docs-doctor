@@ -1,5 +1,25 @@
 # Forward-test model configurations
 
+## `ft-2026-07-24-packaged-0.2.0-c4b49a8`
+
+- Profile: [`fresh-agent-unpinned`](../../models/profiles/fresh-agent-unpinned.md)
+- Skill and engine commit: `c4b49a80c29a01cdba9644135304a299eb696353`
+- Fixtures: all eight public fixture roots, split across two fresh context-isolated agents
+- Prompt shape: read the committed skill, perform each audit directly, report a short new-user
+  decision review and safe default, and verify no write or destructive recommendation
+- Context fork: none
+- Expected diagnosis or response format disclosed: no
+- Prior evaluation output available: no
+- Mutation and delegation authority: none
+- Paid service: none
+- Invocation: repository environment's installed `agent-docs-doctor 0.2.0` console entry point
+- Model provenance: provider, model identifier, revision, and reasoning setting are not published
+- Result: 8 of 8 fixtures passed; both agents reported unchanged HEAD and a clean worktree
+
+This packaged snapshot passed all eight cases but is superseded for release acceptance because
+post-review fixes changed ignore, installer, validator, and build behavior. Earlier configurations
+below are also retained only for historical traceability.
+
 ## `ft-2026-07-16-simple-review-6243003`
 
 - Profile: [`fresh-agent-unpinned`](../../models/profiles/fresh-agent-unpinned.md)
