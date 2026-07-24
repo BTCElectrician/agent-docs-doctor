@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import sysconfig
@@ -23,6 +24,7 @@ CLIENT_PATHS = {
     "claude": Path(".claude/skills") / SKILL_NAME,
     "cursor": Path(".cursor/skills") / SKILL_NAME,
 }
+SAFE_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\Z")
 
 
 @dataclass(frozen=True)
@@ -102,7 +104,7 @@ def _read_manifest(target: Path, expected_client: str | None = None) -> dict[str
         or value.get("format") != "agent-docs-doctor.skill-install.v1"
         or value.get("owner") != "agent-docs-doctor"
         or not isinstance(value.get("version"), str)
-        or not value["version"]
+        or SAFE_VERSION.fullmatch(value["version"]) is None
         or value.get("client") not in CLIENT_PATHS
         or (expected_client is not None and value["client"] != expected_client)
     ):
@@ -163,7 +165,8 @@ def _installed_files_match(target: Path, manifest: dict[str, Any]) -> bool:
 def _backup_path(home: Path, client: str, target: Path) -> Path:
     manifest = _read_manifest(target, client) or {}
     fingerprint = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode("utf-8")).hexdigest()[:12]
-    version = str(manifest.get("version", "unknown")).replace("/", "-")
+    raw_version = str(manifest.get("version", "unknown"))
+    version = re.sub(r"[^A-Za-z0-9._+-]", "-", raw_version)[:128].strip(".") or "unknown"
     parent = home / ".agent-docs-doctor" / "backups" / client
     base = parent / f"{SKILL_NAME}-{version}-{fingerprint}"
     candidate = base

@@ -13,7 +13,6 @@ import sys
 from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
-from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -127,6 +126,7 @@ class IgnoreMatcher:
                         PurePosixPath("."),
                         PurePosixPath(filename),
                         restores_defaults=filename == ".agent-docs-doctorignore",
+                        remaining_rules=MAX_IGNORE_RULES - len(self.rules),
                     )
                 )
 
@@ -136,6 +136,7 @@ class IgnoreMatcher:
         base: PurePosixPath,
         display_path: PurePosixPath,
         restores_defaults: bool,
+        remaining_rules: int,
     ) -> list[IgnoreRule]:
         rules: list[IgnoreRule] = []
         try:
@@ -170,9 +171,10 @@ class IgnoreMatcher:
             directory_only = line.endswith("/")
             line = line.rstrip("/")
             if line:
-                if len(rules) >= MAX_IGNORE_RULES:
+                if len(rules) >= remaining_rules:
                     raise ValueError(
-                        f"ignore control {display_path.as_posix()} exceeds {MAX_IGNORE_RULES} rule limit"
+                        f"ignore controls exceed aggregate {MAX_IGNORE_RULES} rule limit "
+                        f"at {display_path.as_posix()}"
                     )
                 rules.append(
                     IgnoreRule(
@@ -204,6 +206,7 @@ class IgnoreMatcher:
                     relative,
                     PurePosixPath(relative / ".gitignore"),
                     restores_defaults=False,
+                    remaining_rules=MAX_IGNORE_RULES - len(self.rules),
                 )
             )
 
@@ -245,25 +248,22 @@ def path_pattern_matches(path: str, pattern: str) -> bool:
 
     path_parts = PurePosixPath(path).parts
     pattern_parts = PurePosixPath(pattern).parts
-
-    @cache
-    def match(path_index: int, pattern_index: int) -> bool:
-        if pattern_index == len(pattern_parts):
-            return path_index == len(path_parts)
-        segment = pattern_parts[pattern_index]
+    reachable = {0}
+    for pattern_index, segment in enumerate(pattern_parts):
+        if not reachable:
+            return False
         if segment == "**":
             if pattern_index == len(pattern_parts) - 1:
-                return path_index < len(path_parts)
-            return match(path_index, pattern_index + 1) or (
-                path_index < len(path_parts) and match(path_index + 1, pattern_index)
-            )
-        return (
-            path_index < len(path_parts)
-            and fnmatch.fnmatchcase(path_parts[path_index], segment)
-            and match(path_index + 1, pattern_index + 1)
-        )
-
-    return match(0, 0)
+                return any(path_index < len(path_parts) for path_index in reachable)
+            earliest = min(reachable)
+            reachable = set(range(earliest, len(path_parts) + 1))
+            continue
+        reachable = {
+            path_index + 1
+            for path_index in reachable
+            if path_index < len(path_parts) and fnmatch.fnmatchcase(path_parts[path_index], segment)
+        }
+    return len(path_parts) in reachable
 
 
 def name_tokens(stem: str) -> set[str]:
@@ -620,7 +620,7 @@ def sanitized_reference_target(target: str) -> tuple[str, str | None, str]:
     if re.match(r"^[A-Za-z]:[\\/]", target):
         digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
         return "<absolute-filesystem-path>", digest, "absolute-filesystem"
-    if re.match(r"^~[^/\\]*[/\\]", target) or target.startswith("\\\\"):
+    if re.match(r"^~[^/\\]*[/\\]", target) or target.startswith("\\"):
         digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
         return "<absolute-filesystem-path>", digest, "absolute-filesystem"
     if target.startswith("/"):
@@ -1119,7 +1119,7 @@ def validate_audit(data: Any) -> list[str]:
             if not isinstance(configuration, dict):
                 errors.append("engine.configuration must be an object")
             else:
-                for key in sorted(required_configuration):
+                for key in sorted(required_configuration | configuration.keys()):
                     value = configuration.get(key)
                     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                         errors.append(f"engine.configuration.{key} must be a positive integer")
@@ -1163,12 +1163,13 @@ def validate_audit(data: Any) -> list[str]:
                 if not isinstance(limits, dict):
                     errors.append("inventory.coverage.limits must be an object")
                 else:
-                    for key in (
+                    required_limits = {
                         "max_candidate_files",
                         "max_total_read_bytes",
                         "max_file_read_bytes",
                         "max_import_depth",
-                    ):
+                    }
+                    for key in sorted(required_limits | limits.keys()):
                         value = limits.get(key)
                         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                             errors.append(f"inventory.coverage.limits.{key} must be a positive integer")
