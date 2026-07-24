@@ -43,11 +43,14 @@ publish launch messaging or media.
 - Ruff, Pyright, cache-free syntax checks, both report-validator paths, the official skill
   validator, JSON Schema validation, cross-hash-seed determinism, no-write comparison, UBS, public
   safety scanning, package build, and isolated wheel installation pass.
+- The first hosted Windows run exposed one platform-specific invalid-path privacy defect; it was
+  reproduced, fixed before resolution, and added to the final cross-platform rerun.
 - The final fresh contamination-free behavior set passed all eight public fixtures at
-  `d35f94f9ee4d6d96536bfff9952cf8d05d8080e3`; no evaluator wrote repository files, recommended
+  `0ebdf21aa3f34a97cab0e4c544156532168d4bb3`; no evaluator wrote repository files, recommended
   deletion, authorized a deployment, or proposed automatic remediation.
-- Earlier successful sets at `c4b49a8`, `9f599c1`, and `08b9d30` are retained only as superseded
-  evidence because later fixes changed engine, installer, or validator behavior.
+- Earlier successful sets at `c4b49a8`, `9f599c1`, `08b9d30`, and `d35f94f` are retained only as
+  superseded evidence because later fixes changed engine, installer, validator, or cross-platform
+  privacy behavior.
 
 Every push to `main` runs the hosted Linux, macOS, and Windows matrix. The detailed local commands,
 evaluation provenance, and limitations are recorded in the linked repository documents.

@@ -5,10 +5,10 @@
 Run date: 2026-07-24
 
 Configuration:
-[`ft-2026-07-24-final-0.2.0-d35f94f`](projects/forward-tests/MODEL_CONFIGS.md)
+[`ft-2026-07-24-final-0.2.0-0ebdf21`](projects/forward-tests/MODEL_CONFIGS.md)
 
 Two new context-isolated evaluation agents independently used the committed skill and CLI against
-all eight public fixtures at `d35f94f9ee4d6d96536bfff9952cf8d05d8080e3`. Each received four raw
+all eight public fixtures at `0ebdf21aa3f34a97cab0e4c544156532168d4bb3`. Each received four raw
 fixture paths, no expected diagnosis, no prior-result access, no mutation authority, and no
 delegation authority. The bare console command was not globally installed in their fresh shells,
 so they were given the repository environment's existing installed `agent-docs-doctor 0.2.0`
@@ -26,14 +26,14 @@ entry point; no expected behavior or fixture description was added.
 | `thin-adapters` | Correctly mapped the Claude import and conditional Cursor rule and recommended no change | Keep unchanged | Pass |
 
 Result: **8 of 8 cases passed.** Both agents verified the exact code commit and unchanged tracked
-code state before and after. The four in-progress evidence documents already modified by the
+code state before and after. The three in-progress evidence documents already modified by the
 coordinating session were neither read nor changed. Neither agent wrote repository files,
 recommended deletion, authorized a deployment, or proposed automatic remediation.
 
-The otherwise successful fresh sets at `9f599c1` and `08b9d30` are excluded because later
-independent reviews found release-relevant safety and correctness defects. Those defects were
-reproduced and fixed before `d35f94f`; this final set does not reuse the earlier contexts or
-outputs. The `c4b49a8` set below remains superseded for the same provenance reason.
+The otherwise successful fresh sets at `9f599c1`, `08b9d30`, and `d35f94f` are excluded because
+later review or hosted Windows evidence found release-relevant safety and correctness defects.
+Those defects were reproduced and fixed before `0ebdf21`; this final set does not reuse the earlier
+contexts or outputs. The `c4b49a8` set below remains superseded for the same provenance reason.
 
 ## Pre-final packaged 0.2.0 snapshot
 

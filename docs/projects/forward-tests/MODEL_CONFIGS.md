@@ -1,9 +1,9 @@
 # Forward-test model configurations
 
-## `ft-2026-07-24-final-0.2.0-d35f94f`
+## `ft-2026-07-24-final-0.2.0-0ebdf21`
 
 - Profile: [`fresh-agent-unpinned`](../../models/profiles/fresh-agent-unpinned.md)
-- Skill and engine commit: `d35f94f9ee4d6d96536bfff9952cf8d05d8080e3`
+- Skill and engine commit: `0ebdf21aa3f34a97cab0e4c544156532168d4bb3`
 - Fixtures: all eight public fixture roots, split across two new context-isolated agents
 - Prompt shape: read the committed skill, perform each audit directly, report a short new-user
   decision review and safe default, and verify no write or destructive recommendation
@@ -15,11 +15,11 @@
 - Invocation: repository environment's installed `agent-docs-doctor 0.2.0` console entry point
 - Model provenance: provider, model identifier, revision, and reasoning setting are not published
 - Result: 8 of 8 fixtures passed; both agents reported unchanged HEAD and tracked code state, and
-  neither read nor changed the coordinating session's four in-progress evidence documents
+  neither read nor changed the coordinating session's three in-progress evidence documents
 
-This is the final accepted packaged 0.2.0 qualitative set. Fresh 8-of-8 sets at `9f599c1` and
-`08b9d30` are excluded because later review findings changed engine or validator semantics before
-this run.
+This is the final accepted packaged 0.2.0 qualitative set. Fresh 8-of-8 sets at `9f599c1`,
+`08b9d30`, and `d35f94f` are excluded because later review or hosted Windows evidence changed
+engine, installer, or validator semantics before this run.
 
 ## `ft-2026-07-24-packaged-0.2.0-c4b49a8`
 
