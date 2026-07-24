@@ -1,5 +1,41 @@
 # Forward-test results
 
+## Pre-final packaged 0.2.0 snapshot
+
+Run date: 2026-07-24
+
+Configuration:
+[`ft-2026-07-24-packaged-0.2.0-c4b49a8`](projects/forward-tests/MODEL_CONFIGS.md)
+
+Two fresh context-isolated evaluation agents independently used the committed skill and CLI against
+all eight public fixtures at
+`c4b49a80c29a01cdba9644135304a299eb696353`. Each received four raw fixture paths, no expected
+diagnosis, no prior-result access, no mutation authority, and no delegation authority.
+
+| Fixture | Observed behavior | Safe default | Verdict |
+|---|---|---|---|
+| `healthy-repo` | Found no defect across root authority, current state, and API scope | Keep unchanged | Pass |
+| `stale-history` | Connected an automatically referenced plan to retired metadata and asked for an owner-designated successor | Keep files until authority is confirmed | Pass |
+| `conflicting-rules` | Identified the semantic deployment-approval conflict without mislabeling it deterministic | Require approval until an owner resolves scope | Pass |
+| `bloated-repo` | Quantified two exact-overlap groups while preserving release and production-data safeguards | Keep copies until cross-client loading is verified | Pass |
+| `competing-status` | Presented one plain ownership decision for three possibly scoped current-state surfaces | Keep all three until scopes are confirmed | Pass |
+| `intentional-duplication` | Recognized independently exported safety repetition and recommended no change | Keep both copies | Pass |
+| `lightweight-workspace` | Avoided inventing skills, hooks, consolidation, or other work | Keep unchanged | Pass |
+| `thin-adapters` | Correctly mapped the Claude import and conditional Cursor rule and recommended no change | Keep unchanged | Pass |
+
+Result: **8 of 8 cases passed.** Both agents reported an unchanged commit and clean worktree, and
+neither attempted a write or recommended destructive action. The bare console command was not
+globally installed in their fresh shell, which is expected before following the documented `uvx`
+or `uv tool install` path; the repository environment's installed `0.2.0` entry point passed
+`doctor` and all fixture audits.
+
+This run is retained as pre-final evidence. It is superseded for release acceptance because the
+subsequent independent code review changed ignore-marker handling, installer path-state checks,
+validator strictness, and the declared build-backend floor. A new post-fix set is required before
+release.
+
+## Historical acceptance records
+
 Run date: 2026-07-15
 
 Configuration: [`ft-2026-07-15-final-hardened-03e9d44`](projects/forward-tests/MODEL_CONFIGS.md)
@@ -72,7 +108,7 @@ semantics changed after `9467190`, so reusing those outputs would have overstate
 | `stale-history` | High stale-authority finding | Connected the automatic root instruction to retired plan metadata, preserved history, and required a real owner-designated successor | Pass |
 | `thin-adapters` | No required change | Validated the Claude import and Cursor scope, preserved the release gate, and surfaced only the owner-intent boundary around cross-client frontend coverage | Pass |
 
-Final behavioral result: **8 of 8 cases met the predeclared qualitative criteria.** The conflict
+Historical behavioral result: **8 of 8 cases met the predeclared qualitative criteria.** The conflict
 agent used `critical` severity while also acknowledging that production impact was not established;
 `high` would be a reasonable calibration. The core diagnosis and fail-closed recommendation were
 still correct, so this is recorded as a severity limitation rather than hidden or counted as a
