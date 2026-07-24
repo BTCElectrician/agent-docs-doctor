@@ -1,9 +1,66 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "agent-docs-doctor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Evidence-first audits for agent-facing repository documentation"
+readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+authors = [{ name = "BTCElectrician" }]
+keywords = ["agent-skills", "agent-docs", "codex", "claude-code", "cursor"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/BTCElectrician/agent-docs-doctor"
+Issues = "https://github.com/BTCElectrician/agent-docs-doctor/issues"
+Source = "https://github.com/BTCElectrician/agent-docs-doctor"
+
+[project.scripts]
+agent-docs-doctor = "agent_docs_doctor.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "pyright>=1.1,<2",
+  "ruff>=0.12,<1",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.data-files]
+"share/agent-docs-doctor/skill" = ["SKILL.md"]
+"share/agent-docs-doctor/skill/agents" = ["agents/openai.yaml"]
+"share/agent-docs-doctor/skill/references" = [
+  "references/AUDIT_RUBRIC.md",
+  "references/EVALUATION_PROTOCOL.md",
+  "references/MIGRATION_GUIDE.md",
+  "references/PLATFORM_BEHAVIOR.md",
+  "references/REPORT_SCHEMA.md",
+]
+"share/agent-docs-doctor/schemas" = [
+  "schemas/audit-v1.schema.json",
+  "schemas/audit-v2.schema.json",
+]
 
 [tool.ruff]
 target-version = "py310"
@@ -15,4 +72,5 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
-extraPaths = ["scripts"]
+include = ["src", "scripts", "tests"]
+extraPaths = ["src", "scripts"]

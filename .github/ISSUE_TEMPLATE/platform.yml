@@ -1,0 +1,37 @@
+name: Platform discovery gap
+description: Propose a missing agent-document surface with current official evidence.
+title: "platform: "
+labels: ["platform"]
+body:
+  - type: input
+    id: consumer
+    attributes:
+      label: Agent client or consumer
+    validations:
+      required: true
+  - type: input
+    id: surface
+    attributes:
+      label: File or directory surface
+      placeholder: ".example/rules/**/*.md"
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Current official documentation
+      description: Link directly to the primary source supporting loading and scope.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Verified loading behavior and scope
+    validations:
+      required: true
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Minimal synthetic fixture
+    validations:
+      required: true

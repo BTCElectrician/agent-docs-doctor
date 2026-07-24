@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/BTCElectrician/agent-docs-doctor/blob/main/schemas/audit-v1.schema.json",
+  "title": "Agent Docs Doctor audit report v1 (legacy)",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "inventory",
+    "findings",
+    "judgment_queue",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "agent-docs-doctor.audit.v1"
+    },
+    "mode": {
+      "const": "read-only"
+    },
+    "inventory": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "root",
+        "files",
+        "exact_overlap_groups",
+        "skipped",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "agent-docs-doctor.inventory.v1"
+        },
+        "root": {
+          "const": "."
+        },
+        "files": {
+          "type": "array"
+        },
+        "exact_overlap_groups": {
+          "type": "array"
+        },
+        "skipped": {
+          "type": "array"
+        },
+        "warnings": {
+          "type": "array"
+        }
+      }
+    },
+    "findings": {
+      "type": "array"
+    },
+    "judgment_queue": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
