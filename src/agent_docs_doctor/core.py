@@ -1119,9 +1119,16 @@ def validate_audit(data: Any) -> list[str]:
             if not isinstance(configuration, dict):
                 errors.append("engine.configuration must be an object")
             else:
-                for key in sorted(required_configuration | configuration.keys()):
+                for key in sorted(required_configuration):
                     value = configuration.get(key)
                     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                        errors.append(f"engine.configuration.{key} must be a positive integer")
+                for key, value in configuration.items():
+                    if key in required_configuration:
+                        continue
+                    if not isinstance(key, str):
+                        errors.append("engine.configuration keys must be strings")
+                    elif not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                         errors.append(f"engine.configuration.{key} must be a positive integer")
     for key in ("judgment_queue", "limitations"):
         value = data.get(key)
@@ -1169,9 +1176,16 @@ def validate_audit(data: Any) -> list[str]:
                         "max_file_read_bytes",
                         "max_import_depth",
                     }
-                    for key in sorted(required_limits | limits.keys()):
+                    for key in sorted(required_limits):
                         value = limits.get(key)
                         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                            errors.append(f"inventory.coverage.limits.{key} must be a positive integer")
+                    for key, value in limits.items():
+                        if key in required_limits:
+                            continue
+                        if not isinstance(key, str):
+                            errors.append("inventory.coverage.limits keys must be strings")
+                        elif not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                             errors.append(f"inventory.coverage.limits.{key} must be a positive integer")
         files = inventory.get("files")
         if isinstance(files, list):
