@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,6 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(ROOT / "src"))
 
 from doctorlib import (  # noqa: E402
     MAX_IGNORE_RULES,
@@ -26,6 +26,15 @@ from doctorlib import (  # noqa: E402
     validate_audit,
 )
 
+from agent_docs_doctor.installer import (  # noqa: E402
+    MANIFEST_NAME,
+    apply_install,
+    apply_uninstall,
+    plan_install,
+    plan_uninstall,
+    target_for,
+)
+
 
 class DoctorLibTests(unittest.TestCase):
     def write(self, root: Path, relative: str, text: str) -> Path:
@@ -33,6 +42,12 @@ class DoctorLibTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         return path
+
+    def symlink(self, link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=target_is_directory)
+        except OSError as exc:
+            self.skipTest(f"symlink creation unavailable: {exc.__class__.__name__}")
 
     def test_empty_repository(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -129,6 +144,16 @@ class DoctorLibTests(unittest.TestCase):
             paths = [item["path"] for item in build_inventory(root)["files"]]
         self.assertEqual(paths, ["docs/STATUS.md"])
 
+    def test_nested_gitignore_is_control_input_inside_traversed_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".gitignore", "docs/.gitignore\n")
+            self.write(root, "docs/.gitignore", "private/\n")
+            self.write(root, "docs/private/AGENTS.md", "# Private\n")
+            self.write(root, "docs/STATUS.md", "# Public\n")
+            paths = [item["path"] for item in build_inventory(root)["files"]]
+        self.assertEqual(paths, ["docs/STATUS.md"])
+
     def test_slash_pattern_star_does_not_cross_directories(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -199,7 +224,7 @@ class DoctorLibTests(unittest.TestCase):
             sentinel = "ignore-target-private-sentinel"
             outside = self.write(Path(outside_value), "ignore-rules", f"AGENTS.md\n{sentinel}\n")
             control = root / ".gitignore"
-            control.symlink_to(outside)
+            self.symlink(control, outside)
             self.write(root, "AGENTS.md", "# Rules\n")
             original_read_text = Path.read_text
             original_read_bytes = Path.read_bytes
@@ -282,7 +307,7 @@ class DoctorLibTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as value, tempfile.TemporaryDirectory() as outside_value:
             root = Path(value)
             outside = self.write(Path(outside_value), "AGENTS.md", "# Outside\n")
-            (root / "AGENTS.md").symlink_to(outside)
+            self.symlink(root / "AGENTS.md", outside)
             result = build_inventory(root)
         self.assertEqual(result["files"], [])
         self.assertEqual(result["skipped"], [{"path": "AGENTS.md", "reason": "symlink escapes audit root"}])
@@ -291,7 +316,7 @@ class DoctorLibTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
             self.write(root, ".env", "sentinel-do-not-read\n")
-            (root / "AGENTS.md").symlink_to(root / ".env")
+            self.symlink(root / "AGENTS.md", root / ".env")
             result = build_inventory(root)
             serialized = dump_json(result)
         self.assertEqual(result["files"], [])
@@ -305,19 +330,60 @@ class DoctorLibTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
             self.write(root, "AGENTS.md", "# Shared rules\n")
-            (root / "CLAUDE.md").symlink_to(root / "AGENTS.md")
+            self.symlink(root / "CLAUDE.md", root / "AGENTS.md")
             paths = [item["path"] for item in build_inventory(root)["files"]]
         self.assertEqual(paths, ["AGENTS.md", "CLAUDE.md"])
 
     def test_dangling_symlink_has_truthful_skip_reason(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
-            (root / "AGENTS.md").symlink_to(root / "missing.md")
+            self.symlink(root / "AGENTS.md", root / "missing.md")
             result = build_inventory(root)
         self.assertEqual(result["files"], [])
         self.assertEqual(
             result["skipped"],
             [{"path": "AGENTS.md", "reason": "symlink target does not exist"}],
+        )
+
+    def test_symlinked_directory_is_reported_and_not_traversed(self) -> None:
+        with tempfile.TemporaryDirectory() as value, tempfile.TemporaryDirectory() as outside_value:
+            root = Path(value)
+            outside = Path(outside_value)
+            self.write(outside, "AGENTS.md", "# Outside\n")
+            self.symlink(root / "linked", outside, target_is_directory=True)
+            result = build_inventory(root)
+        self.assertEqual(result["files"], [])
+        self.assertIn(
+            {
+                "path": "linked",
+                "reason": "symlink or reparse directory not followed",
+            },
+            result["skipped"],
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction support required")
+    def test_windows_junction_is_reported_and_not_traversed(self) -> None:
+        with tempfile.TemporaryDirectory() as value, tempfile.TemporaryDirectory() as outside_value:
+            root = Path(value)
+            outside = Path(outside_value)
+            self.write(outside, "AGENTS.md", "# Outside junction\n")
+            link = root / "junction"
+            completed = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode != 0:
+                self.skipTest("junction creation unavailable")
+            result = build_inventory(root)
+        self.assertEqual(result["files"], [])
+        self.assertIn(
+            {
+                "path": "junction",
+                "reason": "symlink or reparse directory not followed",
+            },
+            result["skipped"],
         )
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO support required")
@@ -426,6 +492,92 @@ class DoctorLibTests(unittest.TestCase):
         self.assertFalse(outside["inside_root"])
         self.assertIsNone(outside["exists"])
         self.assertFalse(any(item["target"] == "https://example.com" for item in references))
+
+    def test_claude_import_inventories_non_candidate_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "CLAUDE.md", "# Adapter\n\n@docs/POLICY.md\n")
+            self.write(
+                root,
+                "docs/POLICY.md",
+                "# Policy\n\n@nested/OPERATIONS.md\n",
+            )
+            self.write(root, "docs/nested/OPERATIONS.md", "# Operations\n")
+            inventory = build_inventory(root)
+        entries = {item["path"]: item for item in inventory["files"]}
+        self.assertEqual(
+            set(entries),
+            {"CLAUDE.md", "docs/POLICY.md", "docs/nested/OPERATIONS.md"},
+        )
+        self.assertEqual(entries["docs/POLICY.md"]["discovered_by"], "automatic-import")
+        self.assertEqual(entries["docs/POLICY.md"]["kind"], "imported-authority")
+        self.assertEqual(entries["docs/POLICY.md"]["loading"], "automatic")
+        reference = entries["CLAUDE.md"]["references"][0]
+        self.assertEqual(reference["edge_type"], "automatic-import")
+        self.assertEqual(reference["resolution"], "inventoried")
+
+    def test_at_reference_outside_claude_import_chain_is_not_called_automatic(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "AGENTS.md", "@docs/POLICY.md\n")
+            self.write(root, "docs/POLICY.md", "# Policy\n")
+            inventory = build_inventory(root)
+        self.assertEqual([item["path"] for item in inventory["files"]], ["AGENTS.md"])
+        reference = inventory["files"][0]["references"][0]
+        self.assertEqual(reference["edge_type"], "at-reference")
+        self.assertEqual(reference["resolution"], "in-scope")
+
+    def test_claude_import_cycle_is_bounded_and_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "CLAUDE.md", "@docs/A.md\n")
+            self.write(root, "docs/A.md", "@../CLAUDE.md\n")
+            first = dump_json(build_inventory(root), pretty=True)
+            second = dump_json(build_inventory(root), pretty=True)
+        self.assertEqual(first, second)
+        self.assertEqual(
+            [item["path"] for item in json.loads(first)["files"]],
+            ["CLAUDE.md", "docs/A.md"],
+        )
+
+    def test_claude_import_exclusions_are_typed_and_never_opened(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".gitignore", "docs/private/\n")
+            self.write(
+                root,
+                "CLAUDE.md",
+                "\n".join(
+                    (
+                        "@docs/private/POLICY.md",
+                        "@.env",
+                        "@../outside.md",
+                        "@missing.md",
+                        "",
+                    )
+                ),
+            )
+            ignored = self.write(root, "docs/private/POLICY.md", "DO NOT READ\n")
+            secret = self.write(root, ".env", "DO NOT READ\n")
+            original_read_bytes = Path.read_bytes
+
+            def guarded_read_bytes(path: Path) -> bytes:
+                if path in {ignored, secret}:
+                    raise AssertionError("excluded import was opened")
+                return original_read_bytes(path)
+
+            with patch.object(Path, "read_bytes", guarded_read_bytes):
+                inventory = build_inventory(root)
+        references = inventory["files"][0]["references"]
+        by_target = {item["target"]: item for item in references}
+        self.assertEqual(
+            by_target["docs/private/POLICY.md"]["resolution"],
+            "excluded-ignored",
+        )
+        self.assertEqual(by_target[".env"]["resolution"], "excluded-secret")
+        self.assertEqual(by_target["../outside.md"]["resolution"], "out-of-scope")
+        self.assertEqual(by_target["missing.md"]["resolution"], "missing")
+        self.assertEqual([item["path"] for item in inventory["files"]], ["CLAUDE.md"])
 
     def test_same_line_broken_references_have_unique_ids(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -560,8 +712,7 @@ class DoctorLibTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
             raw = (
-                b"```text\r\n[example](docs/example.md)\r\n```\r\n\r\n"
-                b"Read [real](docs/real-missing.md).\r\n"
+                b"```text\r\n[example](docs/example.md)\r\n```\r\n\r\nRead [real](docs/real-missing.md).\r\n"
             )
             (root / "AGENTS.md").write_bytes(raw)
             report = build_audit(root)
@@ -729,6 +880,67 @@ class DoctorLibTests(unittest.TestCase):
         ]
         self.assertIn("findings[0] has invalid severity", validate_audit(report))
 
+    def test_validator_checks_nested_v2_report_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            paragraph = (
+                "Keep this repeated governance paragraph because it is long enough "
+                "to become exact deterministic overlap evidence."
+            )
+            self.write(root, "AGENTS.md", f"{paragraph}\n\n[missing](missing.md)\n")
+            self.write(root, "docs/AGENT_RULES.md", f"{paragraph}\n")
+            report = build_audit(root)
+
+        cases = (
+            (
+                lambda item: item["inventory"]["files"][0]["references"][0].__setitem__("line", "one"),
+                "references[0].line must be a positive integer",
+            ),
+            (
+                lambda item: item["inventory"]["exact_overlap_groups"][0]["occurrences"][0].__setitem__(
+                    "sha256", "0" * 64
+                ),
+                "sha256 must match its group",
+            ),
+            (
+                lambda item: item["inventory"].__setitem__("skipped", [{"path": "x", "reason": None}]),
+                "inventory.skipped[0].reason must be a string",
+            ),
+            (
+                lambda item: item["inventory"].__setitem__("warnings", [{"path": "x", "message": None}]),
+                "inventory.warnings[0].message must be a string",
+            ),
+            (
+                lambda item: item["findings"][0]["locations"][0].__setitem__("line", 0),
+                "locations[0].line must be a positive integer",
+            ),
+            (
+                lambda item: item["inventory"]["coverage"].__setitem__("status", "unknown"),
+                "inventory.coverage.status",
+            ),
+            (
+                lambda item: item["engine"]["configuration"].__setitem__("max_read_bytes", 0),
+                "engine.configuration.max_read_bytes must be a positive integer",
+            ),
+        )
+        for mutate, expected in cases:
+            with self.subTest(expected=expected):
+                candidate = json.loads(json.dumps(report))
+                mutate(candidate)
+                self.assertTrue(
+                    any(expected in error for error in validate_audit(candidate)),
+                    validate_audit(candidate),
+                )
+
+    def test_validator_retains_legacy_v1_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            report = build_audit(value)
+        report["schema_version"] = "agent-docs-doctor.audit.v1"
+        report.pop("engine")
+        report["inventory"]["schema_version"] = "agent-docs-doctor.inventory.v1"
+        report["inventory"].pop("coverage")
+        self.assertEqual(validate_audit(report), [])
+
     def test_standalone_validator_help_flags(self) -> None:
         for flag in ("-h", "--help"):
             with self.subTest(flag=flag):
@@ -881,43 +1093,145 @@ class DoctorLibTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.JSONDecoder().decode(completed.stdout)["mode"], "read-only")
 
-    def test_installed_cli_does_not_create_bytecode_in_target(self) -> None:
-        with tempfile.TemporaryDirectory() as value:
-            root = Path(value)
-            installed_scripts = root / ".agents/skills/agent-docs-doctor/scripts"
-            shutil.copytree(SCRIPTS, installed_scripts, ignore=shutil.ignore_patterns("__pycache__"))
-            self.write(root, ".agents/skills/agent-docs-doctor/SKILL.md", "# Auditor skill\n")
-            self.write(root, ".agents/skills/agent-docs-doctor/STATUS.md", "# Auditor status\n")
-            self.write(root, ".agents/skills/other-skill/SKILL.md", "# Other skill\n")
-            self.write(root, "AGENTS.md", "# Rules\n")
-            self.write(root, "STATUS.md", "# Project status\n")
-            environment = os.environ.copy()
-            environment.pop("PYTHONDONTWRITEBYTECODE", None)
-            completed = subprocess.run(
-                [sys.executable, str(installed_scripts / "agent_docs_doctor.py"), "audit", str(root)],
-                cwd=root,
-                env=environment,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            report = json.JSONDecoder().decode(completed.stdout)
-            paths = [item["path"] for item in report["inventory"]["files"]]
-            skipped = report["inventory"]["skipped"]
-            bytecode = list(root.rglob("__pycache__")) + list(root.rglob("*.pyc"))
-        self.assertNotIn(".agents/skills/agent-docs-doctor/SKILL.md", paths)
-        self.assertNotIn(".agents/skills/agent-docs-doctor/STATUS.md", paths)
-        self.assertIn(".agents/skills/other-skill/SKILL.md", paths)
-        self.assertIn("STATUS.md", paths)
-        self.assertFalse(any(item["category"] == "competing-current-truth" for item in report["findings"]))
-        self.assertIn(
-            {
-                "path": ".agents/skills/agent-docs-doctor",
-                "reason": "auditor's installed package excluded",
-            },
-            skipped,
+    def test_cli_help_version_doctor_and_text_audit_are_clear(self) -> None:
+        entrypoint = [sys.executable, str(SCRIPTS / "agent_docs_doctor.py")]
+        help_result = subprocess.run(
+            [*entrypoint, "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
         )
-        self.assertEqual(bytecode, [])
+        version_result = subprocess.run(
+            [*entrypoint, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        doctor_result = subprocess.run(
+            [*entrypoint, "doctor"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        text_result = subprocess.run(
+            [*entrypoint, "audit", str(ROOT / "fixtures/healthy-repo"), "--format", "text"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("install-skill", help_result.stdout)
+        self.assertIn("without changing it", help_result.stdout)
+        self.assertEqual(version_result.returncode, 0, version_result.stderr)
+        self.assertIn("agent-docs-doctor 0.2.0", version_result.stdout)
+        self.assertEqual(doctor_result.returncode, 0, doctor_result.stderr)
+        self.assertIn("No repository files were changed.", doctor_result.stdout)
+        self.assertEqual(text_result.returncode, 0, text_result.stderr)
+        self.assertIn("Nothing was changed.", text_result.stdout)
+        self.assertNotIn("{", text_result.stdout)
+
+    def test_user_level_skill_install_is_preview_first_and_target_repo_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as home_value, tempfile.TemporaryDirectory() as repo_value:
+            home = Path(home_value)
+            repo = Path(repo_value)
+            self.write(repo, "AGENTS.md", "# Rules\n")
+            before = {
+                path.relative_to(repo).as_posix(): path.read_bytes()
+                for path in repo.rglob("*")
+                if path.is_file()
+            }
+
+            preview = plan_install("codex", home=home)
+            self.assertEqual(preview.state, "ready")
+            self.assertFalse(preview.target.exists())
+
+            installed = apply_install(preview)
+            target = target_for("codex", home)
+            self.assertEqual(installed.state, "applied")
+            self.assertTrue((target / "SKILL.md").is_file())
+            self.assertTrue((target / MANIFEST_NAME).is_file())
+
+            uninstall_preview = plan_uninstall("codex", home=home)
+            self.assertEqual(uninstall_preview.state, "ready")
+            self.assertTrue(target.exists())
+            removed = apply_uninstall(uninstall_preview)
+            self.assertEqual(removed.state, "applied")
+            self.assertFalse(target.exists())
+            assert removed.backup is not None
+            self.assertTrue((removed.backup / "SKILL.md").is_file())
+
+            after = {
+                path.relative_to(repo).as_posix(): path.read_bytes()
+                for path in repo.rglob("*")
+                if path.is_file()
+            }
+        self.assertEqual(before, after)
+
+    def test_skill_installer_refuses_unmanaged_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            home = Path(value)
+            target = target_for("claude", home)
+            self.write(target, "SKILL.md", "# User-owned skill\n")
+            preview = plan_install("claude", home=home, update=True)
+        self.assertEqual(preview.state, "blocked-unmanaged")
+        self.assertIn("not owned", preview.message)
+
+    def test_skill_installer_requires_valid_ownership_manifest_and_matching_files(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            home = Path(value)
+            target = target_for("claude", home)
+            self.write(target, "SKILL.md", "# User-owned skill\n")
+            self.write(
+                target,
+                MANIFEST_NAME,
+                json.dumps({"owner": "agent-docs-doctor"}),
+            )
+            spoofed = plan_install("claude", home=home, update=True)
+            self.assertEqual(spoofed.state, "blocked-unmanaged")
+
+        with tempfile.TemporaryDirectory() as value:
+            home = Path(value)
+            installed = apply_install(plan_install("claude", home=home))
+            (installed.target / "SKILL.md").write_text("# Locally changed\n", encoding="utf-8")
+            changed = plan_install("claude", home=home)
+            self.assertEqual(changed.state, "update-required")
+
+    def test_skill_update_is_atomic_and_preserves_previous_version(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            home = Path(value)
+            installed = apply_install(plan_install("cursor", home=home))
+            target = installed.target
+            manifest = json.loads((target / MANIFEST_NAME).read_text(encoding="utf-8"))
+            manifest["version"] = "0.1.0"
+            (target / MANIFEST_NAME).write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            blocked = plan_install("cursor", home=home)
+            self.assertEqual(blocked.state, "update-required")
+            update = plan_install("cursor", home=home, update=True)
+            self.assertEqual(update.state, "ready")
+            applied = apply_install(update)
+            self.assertEqual(applied.state, "applied")
+            assert applied.backup is not None
+            self.assertTrue((applied.backup / MANIFEST_NAME).is_file())
+            current = json.loads((target / MANIFEST_NAME).read_text(encoding="utf-8"))
+            self.assertEqual(current["version"], "0.2.0")
+
+    def test_skill_apply_refuses_state_changed_after_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            home = Path(value)
+            installed = apply_install(plan_install("codex", home=home))
+            uninstall = plan_uninstall("codex", home=home)
+            manifest_path = installed.target / MANIFEST_NAME
+            manifest_path.write_text(
+                manifest_path.read_text(encoding="utf-8") + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(OSError, "changed after preview"):
+                apply_uninstall(uninstall)
+            self.assertTrue(installed.target.is_dir())
 
     def test_cache_free_syntax_checker(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -953,10 +1267,24 @@ class DoctorLibTests(unittest.TestCase):
 
     def test_public_commands_do_not_prescribe_shared_temp_or_compileall(self) -> None:
         public_workflow = "\n".join(
-            (ROOT / name).read_text(encoding="utf-8") for name in ("README.md", "SKILL.md", "CONTRIBUTING.md")
+            (ROOT / name).read_text(encoding="utf-8")
+            for name in (
+                "README.md",
+                "SKILL.md",
+                "CONTRIBUTING.md",
+                "references/MIGRATION_GUIDE.md",
+                "references/REPORT_SCHEMA.md",
+            )
         )
         self.assertNotIn("/tmp/agent-docs-audit.json", public_workflow)
         self.assertNotIn("-m compileall", public_workflow)
+        lowered = public_workflow.lower()
+        for destructive_command in (
+            "rm" + " -",
+            "remove" + "-item",
+            "git reset " + "--hard",
+        ):
+            self.assertNotIn(destructive_command, lowered)
 
     def test_default_human_review_is_simple_and_requires_preview_approval(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -971,11 +1299,14 @@ class DoctorLibTests(unittest.TestCase):
         self.assertIn("one choice per decision ID", skill)
         self.assertIn("Apply this preview", skill)
         self.assertIn("preview` asks for an exact no-write change preview", skill)
+        self.assertIn("Reply next to see D8 onward.", skill)
+        self.assertIn("without renumbering, repeating", skill)
 
         self.assertLess(schema.index("## Default response"), schema.index("## Advanced evidence"))
         self.assertIn("**Safe default:**", schema)
         self.assertIn("Never show `D2 keep, D2 later`", schema)
         self.assertIn("Nothing has been changed yet.", schema)
+        self.assertIn("12 decisions need review. Showing D1–D7.", schema)
         self.assertIn("Requesting `preview` in the decision review does not authorize writes", migration)
 
         self.assertIn("## What a user gets", readme)
@@ -1002,6 +1333,16 @@ class DoctorLibTests(unittest.TestCase):
             self.assertNotIn(phrase, published)
         self.assertFalse((ROOT / "docs" / "reviews").exists())
         self.assertFalse((ROOT / "docs" / "projects" / "reviews").exists())
+
+    def test_published_schemas_are_valid_json_and_package_entrypoint_is_declared(self) -> None:
+        for name in ("audit-v1.schema.json", "audit-v2.schema.json"):
+            with self.subTest(name=name):
+                schema = json.loads((ROOT / "schemas" / name).read_text(encoding="utf-8"))
+                self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
+                self.assertEqual(schema["type"], "object")
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('agent-docs-doctor = "agent_docs_doctor.cli:main"', pyproject)
+        self.assertIn('"share/agent-docs-doctor/skill"', pyproject)
 
 
 if __name__ == "__main__":

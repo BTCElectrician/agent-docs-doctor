@@ -1,6 +1,7 @@
 # Platform behavior
 
-Verified against official sources on 2026-07-15. Treat all platform behavior as version-sensitive and re-check before a migration.
+Verified against official sources on 2026-07-24. Treat all platform behavior as version-sensitive
+and re-check before a migration.
 
 ## Contents
 
@@ -38,7 +39,11 @@ and [OpenAI, Configuration reference](https://developers.openai.com/codex/config
 
 ### Skills and plugins
 
-Current Codex project skills are discovered from `.agents/skills` between the working directory and repository root. Skills use progressive disclosure: name, description, and path are available for routing; the body loads when selected; bundled resources load as needed. The initial skill list is budgeted, so a precise trigger description matters.
+Current Codex project skills are discovered from `.agents/skills` between the working directory and
+repository root. User-level skills live under `$HOME/.agents/skills`. Skills use progressive
+disclosure: name, description, and path are available for routing; the body loads when selected;
+bundled resources load as needed. The initial skill list is budgeted, so a precise trigger
+description matters.
 
 Use a skill for one repeatable capability or repository workflow. Use a plugin when distribution needs a stable package containing multiple skills, hooks, apps, MCP configuration, or other lifecycle assets. The formerly central `openai/skills` repository now redirects current examples toward plugins, though its system skill-creator remains useful authoring tooling.
 
@@ -62,9 +67,13 @@ Source: [Anthropic, How Claude remembers your project](https://code.claude.com/d
 
 ### Rules, skills, and hooks
 
-`.claude/rules/**/*.md` files without `paths` load at launch. Rules with `paths` load when matching files are read. This is file scope, not event scope.
+`.claude/rules/**/*.md` files without `paths` load at launch. Rules with `paths` load when matching
+files are read. This is file scope, not event scope.
 
-Claude skills progressively disclose their body and resources and support the Agent Skills core plus Claude-specific extensions. Historical `.claude/commands` still work, but commands have converged into skills.
+Claude skills progressively disclose their body and resources and support the Agent Skills core
+plus Claude-specific extensions. User-level skills live under `~/.claude/skills`; project skills
+live under `.claude/skills`. Historical `.claude/commands` still work, but commands have converged
+into skills.
 
 Hooks run on lifecycle events. Only a synchronous, block-capable event with valid deny output or the documented blocking exit behavior is enforcement. Async and observational hooks cannot block.
 
@@ -84,7 +93,11 @@ Source: [Cursor, Rules](https://cursor.com/docs/rules) and [Cursor, CLI](https:/
 
 ### Skills, hooks, and ignore files
 
-Cursor discovers compatible skill directories including `.agents/skills`, `.cursor/skills`, and documented Claude/Codex locations. Skills support progressive disclosure and path scope. Cursor commands are migrating toward manually invoked skills.
+Cursor documents both `.agents/skills` and `.cursor/skills` for project use, plus their matching
+user-level locations. Agent Docs Doctor installs to the native `~/.cursor/skills` location because
+current Cursor CLI compatibility-path behavior has not always matched the editor. Skills support
+progressive disclosure and path scope. Cursor commands are migrating toward manually invoked
+skills.
 
 Cursor hooks differ by event and surface. Some fail open unless `failClosed` is configured; some are fire-and-forget; user hooks do not run in cloud agents. Audit the exact event, blocking contract, failure mode, and local/cloud coverage.
 

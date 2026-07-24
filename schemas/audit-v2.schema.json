@@ -1,0 +1,466 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/BTCElectrician/agent-docs-doctor/blob/main/schemas/audit-v2.schema.json",
+  "title": "Agent Docs Doctor audit report v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "engine",
+    "inventory",
+    "findings",
+    "judgment_queue",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "agent-docs-doctor.audit.v2"
+    },
+    "mode": {
+      "const": "read-only"
+    },
+    "engine": {
+      "$ref": "#/$defs/engine"
+    },
+    "inventory": {
+      "$ref": "#/$defs/inventory"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "judgment_queue": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "engine": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "configuration"
+      ],
+      "properties": {
+        "name": {
+          "const": "agent-docs-doctor"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "configuration": {
+          "type": "object",
+          "required": [
+            "max_read_bytes",
+            "max_ignore_rules",
+            "max_candidate_files",
+            "max_total_read_bytes",
+            "max_import_depth"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/positiveInteger"
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "status",
+        "candidate_files",
+        "read_bytes",
+        "limits"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial"
+          ]
+        },
+        "candidate_files": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "read_bytes": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "max_candidate_files",
+            "max_total_read_bytes",
+            "max_file_read_bytes",
+            "max_import_depth"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/positiveInteger"
+          }
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "required": [
+        "target",
+        "target_kind",
+        "edge_type",
+        "resolution",
+        "line",
+        "column",
+        "inside_root",
+        "exists"
+      ],
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "target_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "edge_type": {
+          "enum": [
+            "markdown-link",
+            "automatic-import",
+            "at-reference"
+          ]
+        },
+        "resolution": {
+          "enum": [
+            "in-scope",
+            "inventoried",
+            "missing",
+            "out-of-scope",
+            "unresolved",
+            "excluded-secret",
+            "excluded-ignored",
+            "excluded-non-regular",
+            "excluded-depth-limit",
+            "excluded-candidate-budget"
+          ]
+        },
+        "line": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "column": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "inside_root": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "exists": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": [
+        "path",
+        "bytes",
+        "lines",
+        "sha256",
+        "metadata",
+        "references",
+        "discovered_by",
+        "kind",
+        "platforms",
+        "loading",
+        "role",
+        "archive",
+        "retired_metadata",
+        "classification_basis"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "bytes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/nonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lines": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/nonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "discovered_by": {
+          "enum": [
+            "filename",
+            "automatic-import"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "loading": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "archive": {
+          "type": "boolean"
+        },
+        "retired_metadata": {
+          "type": "boolean"
+        },
+        "classification_basis": {
+          "type": "string"
+        }
+      }
+    },
+    "occurrence": {
+      "type": "object",
+      "required": [
+        "path",
+        "line",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "overlap": {
+      "type": "object",
+      "required": [
+        "sha256",
+        "occurrences"
+      ],
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "occurrences": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/occurrence"
+          },
+          "minItems": 2
+        }
+      }
+    },
+    "skipped": {
+      "type": "object",
+      "required": [
+        "path",
+        "reason"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "required": [
+        "path",
+        "message"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "root",
+        "coverage",
+        "files",
+        "exact_overlap_groups",
+        "skipped",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "agent-docs-doctor.inventory.v2"
+        },
+        "root": {
+          "const": "."
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file"
+          }
+        },
+        "exact_overlap_groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/overlap"
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/skipped"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "column": {
+          "$ref": "#/$defs/positiveInteger"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "severity",
+        "evidence_type",
+        "category",
+        "summary",
+        "locations",
+        "uncertainty"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "informational"
+          ]
+        },
+        "evidence_type": {
+          "enum": [
+            "deterministic",
+            "model-judgment",
+            "user-decision"
+          ]
+        },
+        "category": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/location"
+          }
+        },
+        "evidence": {
+          "type": "object"
+        },
+        "uncertainty": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

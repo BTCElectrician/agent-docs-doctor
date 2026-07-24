@@ -16,11 +16,15 @@ Agent Docs Doctor is intentionally conservative: deterministic code reports obse
 
 ```bash
 python3 -B -m unittest discover -s tests -v
-python3 -B scripts/check_python_syntax.py scripts tests
-python3 -B scripts/agent_docs_doctor.py audit fixtures/healthy-repo --pretty
+python3 -B scripts/check_python_syntax.py src scripts tests
+python3 -B scripts/agent_docs_doctor.py audit fixtures/healthy-repo --format json --pretty
+ruff check src scripts tests
+ruff format --check src scripts tests
+pyright
+uv build
 ```
 
-Run the current official skill validator against the repository root. If `ruff` is available, run `ruff check scripts tests`.
+Run the current official skill validator against the repository root.
 
 New discovery behavior needs tests for ignored paths, secret-like names, relative output, deterministic ordering, and read-only operation. New platform classifications need a dated official source in `references/PLATFORM_BEHAVIOR.md`.
 
@@ -37,6 +41,10 @@ For a new deterministic finding:
 3. state uncertainty and alternative explanations;
 4. add positive and negative tests;
 5. update the report reference when the shape changes.
+
+Backward-compatible additions stay within the current schema version. A breaking field or semantic
+change requires a new versioned file under `schemas/`, legacy-validator coverage, and an explicit
+migration note.
 
 For a new recommendation heuristic, keep it in the skill or rubric rather than disguising it as deterministic code.
 

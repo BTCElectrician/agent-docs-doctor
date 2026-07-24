@@ -46,6 +46,16 @@ Nothing will be changed until you review a separate change preview and explicitl
 Use exactly one choice per decision ID in the example reply. Never show `D2 keep, D2 later` as if
 both should be sent.
 
+If more than seven decisions exist, state the total and the visible range:
+
+```text
+12 decisions need review. Showing D1–D7.
+Reply “next” to see D8 onward.
+```
+
+Keep IDs stable for the audit session. `next` shows only the next unseen page; it must not
+renumber, repeat, reorder, or silently revise earlier decisions.
+
 `preview` asks for an exact no-write change preview. `keep` preserves the current file. `later`
 defers the decision. `show evidence` expands the technical report.
 
@@ -98,10 +108,11 @@ item and use **Keep** or **Ask an owner** as the safe default.
 
 ## Deterministic JSON
 
-`scripts/agent_docs_doctor.py audit` emits `agent-docs-doctor.audit.v1` with:
+`agent-docs-doctor audit . --format json` emits `agent-docs-doctor.audit.v2` with:
 
 - `mode: "read-only"`;
-- an `agent-docs-doctor.inventory.v1` inventory;
+- deterministic engine and configuration provenance;
+- an `agent-docs-doctor.inventory.v2` inventory with complete-or-partial coverage;
 - deterministic `findings` with stable IDs;
 - a semantic `judgment_queue`;
 - explicit `limitations`.
@@ -112,12 +123,26 @@ finding IDs remain unique when a line contains repeated links. Absolute-style Ma
 targets are replaced with typed placeholders and one-way hashes so a shareable ledger does not
 reproduce local filesystem paths. References inside Markdown fenced code are not treated as links.
 
-An installed auditor package nested inside the target is listed in `skipped` and excluded from the inventory; other installed skills remain auditable. Default-pruned directories are also listed in `skipped`; only `.agent-docs-doctorignore` can restore one with an explicit negation such as `!fixtures/`. Symlinked ignore-control files are not followed and are reported as a limitation. Ignore controls above 2 MB or 10,000 active rules stop the audit before the repository walk. An ignored `.codex/config.toml` is not opened or used for fallback discovery. Non-regular candidates such as named pipes and dangling symlinks are not opened and receive distinct skip reasons.
+References include `edge_type` and `resolution`. Recognized automatic imports are inventoried
+recursively when they remain safe and in scope. Missing, ignored, secret-like, non-regular,
+depth-limited, invalid, and out-of-root targets stay visible as typed dispositions without being
+opened.
+
+Default-pruned directories are listed in `skipped`; only `.agent-docs-doctorignore` can restore one
+with an explicit negation such as `!fixtures/`. Symlinked ignore-control files are not followed and
+are reported as a limitation. Ignore controls above 2 MB or 10,000 active rules stop the audit
+before the repository walk. An ignored `.codex/config.toml` is not opened or used for fallback
+discovery. Non-regular candidates such as named pipes and dangling symlinks are not opened and
+receive distinct skip reasons.
 
 The inventory is deterministic for a stable filesystem snapshot. Concurrent mutation can produce
 read warnings or a mixed snapshot; rerun against a stable checkout when the evidence is material.
 
-Validate it with `scripts/validate_report.py`. Both that entry point and `agent_docs_doctor.py
-validate-report` exit `0` for valid output or help, `1` for a well-formed report rejected by the
-schema, and `2` for usage, file I/O, or JSON parsing errors. The JSON is evidence input, not a
-complete semantic audit.
+The complete current contract is
+[`schemas/audit-v2.schema.json`](../schemas/audit-v2.schema.json). The validator accepts v1 reports
+for compatibility and validates all emitted v2 nested references, overlaps, skip/warning records,
+coverage, provenance, findings, and locations.
+
+`agent-docs-doctor validate-report` exits `0` for valid output or help, `1` for a well-formed report
+rejected by the schema, and `2` for usage, file I/O, or JSON parsing errors. The JSON is evidence
+input, not a complete semantic audit.
