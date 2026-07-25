@@ -1467,7 +1467,7 @@ class WindowsInstallerPreviewTests(unittest.TestCase):
                 renamed.rename(pinned)
 
             pinned_file = pinned / "payload.txt"
-            pinned_file.write_text("public payload\n", encoding="utf-8")
+            pinned_file.write_bytes(b"public payload\n")
             file_descriptor = installer._open_windows_file_descriptor(
                 pinned_file,
                 pinned_file.lstat(),

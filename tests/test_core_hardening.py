@@ -276,7 +276,10 @@ def test_bounded_input_rejects_existing_ancestor_alias_to_in_root_secret() -> No
             pytest.skip(f"symlinks unavailable: {exc.__class__.__name__}")
         with (
             patch.object(core.os, "read") as read_mock,
-            pytest.raises(ValueError, match="path changed"),
+            pytest.raises(
+                ValueError,
+                match="(path changed|targets a secret-like path)",
+            ),
         ):
             core.read_bounded_input(
                 root / "docs" / "AGENTS.md",
@@ -324,7 +327,10 @@ def test_bounded_input_rejects_post_discovery_ancestor_replacement() -> None:
 
         with (
             patch.object(core.os, "read") as read_mock,
-            pytest.raises(ValueError, match="path changed"),
+            pytest.raises(
+                ValueError,
+                match="(path changed|targets a secret-like path)",
+            ),
         ):
             core.read_bounded_input(
                 root / "docs" / "AGENTS.md",
