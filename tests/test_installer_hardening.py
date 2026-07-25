@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import stat
@@ -7,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from dataclasses import replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -76,6 +78,18 @@ class InstallerHardeningTests(unittest.TestCase):
             path.write_text(f"# {path.stem}\n", encoding="utf-8")
         (root / "not-allowlisted.txt").write_text("must not be installed\n", encoding="utf-8")
         return root
+
+    @staticmethod
+    def _patch_bundled_source(source: Path):
+        source_stat = source.lstat()
+        return mock.patch.object(
+            installer,
+            "_bundled_source",
+            return_value=installer._BundledSource(
+                source,
+                root_identity=(source_stat.st_dev, source_stat.st_ino),
+            ),
+        )
 
     def test_ancestor_symlink_is_rejected_without_touching_its_destination(self) -> None:
         with (
@@ -159,7 +173,7 @@ class InstallerHardeningTests(unittest.TestCase):
         ):
             home = Path(home_value)
             source = self._synthetic_source(Path(source_value))
-            with mock.patch.object(installer, "bundled_skill_root", return_value=source):
+            with self._patch_bundled_source(source):
                 preview = plan_install("cursor", home=home)
                 (source / "SKILL.md").write_text("# Changed after preview\n", encoding="utf-8")
                 with self.assertRaisesRegex(OSError, "source changed after preview"):
@@ -180,21 +194,27 @@ class InstallerHardeningTests(unittest.TestCase):
             executing = root / "current" / "agent_docs_doctor" / "installer.py"
             executing.parent.mkdir(parents=True)
             executing.write_text("# current code\n", encoding="utf-8")
-            other_code = root / "other" / "agent_docs_doctor" / "installer.py"
+            site_packages = root / "other" / "site-packages"
+            other_code = site_packages / "agent_docs_doctor" / "installer.py"
             other_code.parent.mkdir(parents=True)
             other_code.write_text("# unrelated code\n", encoding="utf-8")
-            stale_skill = root / "other" / "share" / "agent-docs-doctor" / "skill"
-            stale_skill.mkdir(parents=True)
-            (stale_skill / "SKILL.md").write_text("# stale skill\n", encoding="utf-8")
-            code_item = PurePosixPath("agent_docs_doctor/installer.py")
-            skill_item = PurePosixPath("share/agent-docs-doctor/skill/SKILL.md")
+            stale_skill = self._synthetic_source(root / "other" / "share" / "agent-docs-doctor" / "skill")
+            dist_info = site_packages / "agent_docs_doctor-0.3.0.dist-info"
+            dist_info.mkdir()
+            rows = [
+                self._record_row("agent_docs_doctor/installer.py", other_code),
+                *[
+                    self._record_row(
+                        f"../share/agent-docs-doctor/skill/{relative}",
+                        stale_skill / relative,
+                    )
+                    for relative in installer.SOURCE_RELATIVE_PATHS
+                ],
+            ]
+            (dist_info / "RECORD").write_text("".join(rows), encoding="utf-8")
 
             class MismatchedDistribution:
-                files = (code_item, skill_item)
-
-                @staticmethod
-                def locate_file(item: PurePosixPath) -> Path:
-                    return other_code if item == code_item else stale_skill / "SKILL.md"
+                _path = dist_info
 
             with (
                 mock.patch.object(installer, "__file__", os.fspath(executing)),
@@ -206,6 +226,282 @@ class InstallerHardeningTests(unittest.TestCase):
                 self.assertRaises(FileNotFoundError),
             ):
                 installer.bundled_skill_root()
+
+    @staticmethod
+    def _record_row(archive_path: str, located: Path, *, digest: str | None = None) -> str:
+        raw = located.read_bytes()
+        record_digest = digest or (
+            "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).rstrip(b"=").decode("ascii")
+        )
+        return f"{archive_path},{record_digest},{len(raw)}\n"
+
+    def test_distribution_record_binds_copied_resources_and_rejects_hardlinks(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as root_value,
+            tempfile.TemporaryDirectory() as home_value,
+        ):
+            root = Path(root_value)
+            home = Path(home_value)
+            source = self._synthetic_source(root / "share" / "agent-docs-doctor" / "skill")
+            site_packages = root / "site-packages"
+            executing = site_packages / "agent_docs_doctor" / "installer.py"
+            executing.parent.mkdir(parents=True)
+            executing.write_text("# active code\n", encoding="utf-8")
+            dist_info = site_packages / "agent_docs_doctor-0.3.0.dist-info"
+            dist_info.mkdir()
+
+            def record_rows(
+                *,
+                code_digest: str | None = None,
+                first_digest: str | None = None,
+            ) -> list[str]:
+                return [
+                    self._record_row(
+                        "agent_docs_doctor/installer.py",
+                        executing,
+                        digest=code_digest,
+                    ),
+                    *[
+                        self._record_row(
+                            f"../share/agent-docs-doctor/skill/{relative}",
+                            source / relative,
+                            digest=first_digest if index == 0 else None,
+                        )
+                        for index, relative in enumerate(installer.SOURCE_RELATIVE_PATHS)
+                    ],
+                ]
+
+            record_path = dist_info / "RECORD"
+            original_rows = record_rows()
+            record_path.write_text("".join(original_rows), encoding="utf-8")
+
+            class FakeDistribution:
+                _path = dist_info
+
+            distribution = FakeDistribution()
+            distribution_lookup = mock.Mock(return_value=distribution)
+            with (
+                mock.patch.object(installer, "__file__", os.fspath(executing)),
+                mock.patch.object(
+                    installer.metadata,
+                    "distribution",
+                    distribution_lookup,
+                ),
+            ):
+                preview = plan_install("codex", home=home)
+                self.assertEqual(preview.state, "ready")
+                self.assertIsNotNone(preview.plan_token)
+                distribution_lookup.assert_called_once_with("agent-docs-doctor")
+
+                invalid_code_rows = original_rows.copy()
+                invalid_code_rows[0] = "agent_docs_doctor/installer.py,,\n"
+                record_path.write_text("".join(invalid_code_rows), encoding="utf-8")
+                with self.assertRaisesRegex(OSError, "invalid executing-module record"):
+                    plan_install("codex", home=home)
+
+                record_path.write_text(
+                    "".join(record_rows(code_digest=f"sha256={'A' * 43}")),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(OSError, "executing installer"):
+                    plan_install("codex", home=home)
+
+                record_path.write_text(
+                    "".join(record_rows(first_digest=f"sha256={'A' * 43}")),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(OSError, "distribution record"):
+                    plan_install("codex", home=home)
+
+                record_path.write_text("".join(original_rows[:-1]), encoding="utf-8")
+                with self.assertRaisesRegex(OSError, "records are incomplete"):
+                    plan_install("codex", home=home)
+
+                record_path.write_text(
+                    "".join(
+                        [
+                            *original_rows,
+                            self._record_row(
+                                "../share/agent-docs-doctor/skill/not-allowlisted.txt",
+                                source / "not-allowlisted.txt",
+                            ),
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(OSError, "unexpected bundled skill record"):
+                    plan_install("codex", home=home)
+
+                record_path.write_text("".join(original_rows), encoding="utf-8")
+                alias = root / "private-hardlink-alias"
+                os.link(source / "SKILL.md", alias)
+                real_read = installer.os.read
+
+                def reject_payload_read(descriptor: int, size: int) -> bytes:
+                    descriptor_path = installer._descriptor_resolved_path(descriptor)
+                    if (
+                        descriptor_path is not None
+                        and descriptor_path.resolve() == (source / "SKILL.md").resolve()
+                    ):
+                        raise AssertionError("hard-linked skill bytes were read")
+                    return real_read(descriptor, size)
+
+                with (
+                    mock.patch.object(installer.os, "read", side_effect=reject_payload_read),
+                    self.assertRaisesRegex(OSError, "hard-linked"),
+                ):
+                    plan_install("codex", home=home)
+
+    def test_distribution_record_limits_fail_closed_before_resource_reads(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as root_value,
+            tempfile.TemporaryDirectory() as home_value,
+        ):
+            root = Path(root_value)
+            home = Path(home_value)
+            site_packages = root / "site-packages"
+            executing = site_packages / "agent_docs_doctor" / "installer.py"
+            executing.parent.mkdir(parents=True)
+            executing.write_text("# active code\n", encoding="utf-8")
+            dist_info = site_packages / "agent_docs_doctor-0.3.0.dist-info"
+            dist_info.mkdir()
+            record_path = dist_info / "RECORD"
+            record_path.write_text(
+                "".join(self._record_row(f"entry-{index}.txt", executing) for index in range(3)),
+                encoding="utf-8",
+            )
+
+            class FakeDistribution:
+                _path = dist_info
+
+            with (
+                mock.patch.object(installer, "__file__", os.fspath(executing)),
+                mock.patch.object(
+                    installer.metadata,
+                    "distribution",
+                    return_value=FakeDistribution(),
+                ),
+                mock.patch.object(installer, "MAX_DISTRIBUTION_RECORDS", 2),
+                self.assertRaisesRegex(OSError, "row limit"),
+            ):
+                plan_install("codex", home=home)
+
+            with (
+                mock.patch.object(installer, "__file__", os.fspath(executing)),
+                mock.patch.object(
+                    installer.metadata,
+                    "distribution",
+                    return_value=FakeDistribution(),
+                ),
+                mock.patch.object(installer, "MAX_DISTRIBUTION_RECORD_BYTES", 16),
+                self.assertRaisesRegex(OSError, "oversized|safety limit"),
+            ):
+                plan_install("codex", home=home)
+
+    def test_distribution_metadata_replacement_cannot_redirect_record_read(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as root_value,
+            tempfile.TemporaryDirectory() as home_value,
+        ):
+            root = Path(root_value)
+            home = Path(home_value)
+            site_packages = root / "site-packages"
+            executing = site_packages / "agent_docs_doctor" / "installer.py"
+            executing.parent.mkdir(parents=True)
+            executing.write_text("# active code\n", encoding="utf-8")
+            dist_info = site_packages / "agent_docs_doctor-0.3.0.dist-info"
+            dist_info.mkdir()
+            (dist_info / "RECORD").write_text(
+                self._record_row("agent_docs_doctor/installer.py", executing),
+                encoding="utf-8",
+            )
+
+            class FakeDistribution:
+                _path = dist_info
+
+            original_dist_info = site_packages / "original.dist-info"
+            resolved_dist_info = dist_info.resolve()
+            pin_name = "_open_windows_directory_handle" if os.name == "nt" else "_open_absolute_directory"
+            real_open_directory = getattr(installer, pin_name)
+            swapped = False
+
+            def replace_before_open(path: Path, *args: object) -> int:
+                nonlocal swapped
+                if path == resolved_dist_info and not swapped:
+                    swapped = True
+                    dist_info.rename(original_dist_info)
+                    dist_info.mkdir()
+                    (dist_info / "RECORD").write_text(
+                        "synthetic-private-record-data\n",
+                        encoding="utf-8",
+                    )
+                return real_open_directory(path, *args)
+
+            with (
+                mock.patch.object(installer, "__file__", os.fspath(executing)),
+                mock.patch.object(
+                    installer.metadata,
+                    "distribution",
+                    return_value=FakeDistribution(),
+                ),
+                mock.patch.object(
+                    installer,
+                    pin_name,
+                    side_effect=replace_before_open,
+                ),
+                self.assertRaisesRegex(OSError, "metadata changed before|pinned safely"),
+            ):
+                plan_install("codex", home=home)
+            self.assertTrue(swapped)
+
+    def test_source_root_replacement_is_rejected_before_replacement_bytes_are_read(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as root_value,
+            tempfile.TemporaryDirectory() as home_value,
+        ):
+            root = Path(root_value)
+            home = Path(home_value)
+            source = self._synthetic_source(root / "source")
+            original_source = root / "source-original"
+            resolved_source = source.resolve()
+            pin_name = "_open_windows_directory_handle" if os.name == "nt" else "_open_absolute_directory"
+            real_open_directory = getattr(installer, pin_name)
+            real_read = installer.os.read
+            swapped = False
+
+            def replace_before_open(path: Path, *args: object) -> int:
+                nonlocal swapped
+                if path == resolved_source and not swapped:
+                    swapped = True
+                    source.rename(original_source)
+                    replacement = self._synthetic_source(source)
+                    (replacement / "SKILL.md").write_text(
+                        "synthetic private replacement\n",
+                        encoding="utf-8",
+                    )
+                return real_open_directory(path, *args)
+
+            def reject_replacement_read(descriptor: int, size: int) -> bytes:
+                descriptor_path = installer._descriptor_resolved_path(descriptor)
+                if (
+                    descriptor_path is not None
+                    and descriptor_path.resolve() == (source / "SKILL.md").resolve()
+                ):
+                    raise AssertionError("replacement skill bytes were read")
+                return real_read(descriptor, size)
+
+            with (
+                self._patch_bundled_source(source),
+                mock.patch.object(
+                    installer,
+                    pin_name,
+                    side_effect=replace_before_open,
+                ),
+                mock.patch.object(installer.os, "read", side_effect=reject_replacement_read),
+                self.assertRaisesRegex(OSError, "root changed|pinned safely"),
+            ):
+                plan_install("codex", home=home)
+            self.assertTrue(swapped)
 
     def test_source_directory_swap_cannot_redirect_staging_reads(self) -> None:
         with (
@@ -220,7 +516,7 @@ class InstallerHardeningTests(unittest.TestCase):
                 "external payload must not be staged\n",
                 encoding="utf-8",
             )
-            with mock.patch.object(installer, "bundled_skill_root", return_value=source):
+            with self._patch_bundled_source(source):
                 preview = plan_install("cursor", home=home)
                 real_inventory = installer._bounded_child_names_fd
                 inventory_calls = 0
@@ -231,11 +527,19 @@ class InstallerHardeningTests(unittest.TestCase):
                     inventory_calls += 1
                     if inventory_calls == 2:
                         (source / "references").rename(source / "references-original")
-                        (source / "references").symlink_to(
-                            external / "references",
-                            target_is_directory=True,
-                        )
+                        (external / "references").rename(source / "references")
                     return names
+
+                real_read = installer.os.read
+
+                def reject_external_read(descriptor: int, size: int) -> bytes:
+                    descriptor_path = installer._descriptor_resolved_path(descriptor)
+                    if (
+                        descriptor_path is not None
+                        and descriptor_path.resolve() == (source / "references" / "AUDIT_RUBRIC.md").resolve()
+                    ):
+                        raise AssertionError("replacement directory bytes were read")
+                    return real_read(descriptor, size)
 
                 with (
                     mock.patch.object(
@@ -243,6 +547,7 @@ class InstallerHardeningTests(unittest.TestCase):
                         "_bounded_child_names_fd",
                         side_effect=swap_after_reference_inventory,
                     ),
+                    mock.patch.object(installer.os, "read", side_effect=reject_external_read),
                     self.assertRaises(OSError),
                 ):
                     apply_install(preview, preview.plan_token or "")
@@ -290,7 +595,7 @@ class InstallerHardeningTests(unittest.TestCase):
         ):
             home = Path(home_value)
             source = self._synthetic_source(Path(source_value))
-            with mock.patch.object(installer, "bundled_skill_root", return_value=source):
+            with self._patch_bundled_source(source):
                 preview = plan_install("codex", home=home)
                 applied = apply_install(preview, preview.plan_token or "")
 
@@ -317,14 +622,23 @@ class InstallerHardeningTests(unittest.TestCase):
             real_reader = installer._read_regular_bytes
             opened: list[Path] = []
 
-            def guarded_reader(path: Path, *, limit: int) -> bytes:
+            def guarded_reader(
+                path: Path,
+                *,
+                limit: int,
+                reject_hardlinks: bool = True,
+            ) -> bytes:
                 opened.append(path)
                 if path == unexpected:
                     raise AssertionError("unexpected reference content was read")
-                return real_reader(path, limit=limit)
+                return real_reader(
+                    path,
+                    limit=limit,
+                    reject_hardlinks=reject_hardlinks,
+                )
 
             with (
-                mock.patch.object(installer, "bundled_skill_root", return_value=source),
+                self._patch_bundled_source(source),
                 mock.patch.object(installer, "_read_regular_bytes", side_effect=guarded_reader),
                 self.assertRaisesRegex(OSError, "static public allowlist"),
             ):
@@ -340,7 +654,7 @@ class InstallerHardeningTests(unittest.TestCase):
             source = self._synthetic_source(Path(source_value))
             os.link(source / "SKILL.md", source / "skill-hardlink-alias")
             with (
-                mock.patch.object(installer, "bundled_skill_root", return_value=source),
+                self._patch_bundled_source(source),
                 self.assertRaisesRegex(OSError, "hard-linked"),
             ):
                 plan_install("codex", home=home)
@@ -998,11 +1312,20 @@ class InstallerHardeningTests(unittest.TestCase):
             real_reader = installer._read_regular_bytes
             opened: list[Path] = []
 
-            def guarded_reader(path: Path, *, limit: int) -> bytes:
+            def guarded_reader(
+                path: Path,
+                *,
+                limit: int,
+                reject_hardlinks: bool = True,
+            ) -> bytes:
                 opened.append(path)
                 if path == unmanaged_extra:
                     raise AssertionError("unmanaged content was read")
-                return real_reader(path, limit=limit)
+                return real_reader(
+                    path,
+                    limit=limit,
+                    reject_hardlinks=reject_hardlinks,
+                )
 
             with mock.patch.object(
                 installer,
@@ -1020,11 +1343,20 @@ class InstallerHardeningTests(unittest.TestCase):
             managed_extra.write_text("must not be opened\n", encoding="utf-8")
             opened = []
 
-            def guarded_managed_reader(path: Path, *, limit: int) -> bytes:
+            def guarded_managed_reader(
+                path: Path,
+                *,
+                limit: int,
+                reject_hardlinks: bool = True,
+            ) -> bytes:
                 opened.append(path)
                 if path == managed_extra:
                     raise AssertionError("managed extra content was read")
-                return real_reader(path, limit=limit)
+                return real_reader(
+                    path,
+                    limit=limit,
+                    reject_hardlinks=reject_hardlinks,
+                )
 
             real_open = installer.os.open
 
@@ -1082,6 +1414,98 @@ class InstallerHardeningTests(unittest.TestCase):
                 apply_install(preview, preview.plan_token or "")
             self.assertNotIn(str(home), str(captured.exception))
             self.assertFalse((home / ".agents").exists())
+
+
+@unittest.skipUnless(os.name == "nt", "Windows native pinning test")
+class WindowsInstallerPreviewTests(unittest.TestCase):
+    def test_native_handle_abi_and_root_replacement_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as root_value:
+            root = Path(root_value)
+            pinned = root / "pinned"
+            pinned.mkdir()
+            pinned_stat = pinned.lstat()
+            handle = installer._open_windows_directory_handle(
+                pinned,
+                (pinned_stat.st_dev, pinned_stat.st_ino),
+            )
+            renamed = root / "renamed"
+            try:
+                resolved = installer._windows_handle_resolved_path(handle)
+                self.assertIsNotNone(resolved)
+                if resolved is None:
+                    self.fail("pinned Windows directory path was unavailable")
+                self.assertEqual(
+                    os.path.normcase(os.path.abspath(os.fspath(resolved))),
+                    os.path.normcase(os.path.abspath(os.fspath(pinned))),
+                )
+                with self.assertRaises(OSError):
+                    pinned.rename(renamed)
+            finally:
+                installer._close_windows_handle(handle)
+            pinned.rename(renamed)
+            renamed.rename(pinned)
+
+            pinned_file = pinned / "payload.txt"
+            pinned_file.write_text("public payload\n", encoding="utf-8")
+            file_descriptor = installer._open_windows_file_descriptor(
+                pinned_file,
+                pinned_file.lstat(),
+            )
+            try:
+                self.assertFalse(os.get_inheritable(file_descriptor))
+                self.assertEqual(os.read(file_descriptor, 1024), b"public payload\n")
+            finally:
+                os.close(file_descriptor)
+
+        with (
+            tempfile.TemporaryDirectory() as root_value,
+            tempfile.TemporaryDirectory() as home_value,
+        ):
+            root = Path(root_value)
+            home = Path(home_value)
+            source = InstallerHardeningTests._synthetic_source(root / "source")
+            original_source = root / "source-original"
+            resolved_source = source.resolve()
+            real_pin = installer._open_windows_directory_handle
+            real_read = installer.os.read
+            swapped = False
+
+            def replace_before_pin(
+                path: Path,
+                identity: tuple[int, int],
+            ) -> int:
+                nonlocal swapped
+                if path == resolved_source and not swapped:
+                    swapped = True
+                    source.rename(original_source)
+                    replacement = InstallerHardeningTests._synthetic_source(source)
+                    (replacement / "SKILL.md").write_text(
+                        "synthetic private replacement\n",
+                        encoding="utf-8",
+                    )
+                return real_pin(path, identity)
+
+            def reject_replacement_read(descriptor: int, size: int) -> bytes:
+                descriptor_path = installer._descriptor_resolved_path(descriptor)
+                if (
+                    descriptor_path is not None
+                    and descriptor_path.resolve() == (source / "SKILL.md").resolve()
+                ):
+                    raise AssertionError("replacement skill bytes were read")
+                return real_read(descriptor, size)
+
+            with (
+                InstallerHardeningTests._patch_bundled_source(source),
+                mock.patch.object(
+                    installer,
+                    "_open_windows_directory_handle",
+                    side_effect=replace_before_pin,
+                ),
+                mock.patch.object(installer.os, "read", side_effect=reject_replacement_read),
+                self.assertRaisesRegex(OSError, "pinned safely"),
+            ):
+                plan_install("codex", home=home)
+            self.assertTrue(swapped)
 
 
 if __name__ == "__main__":

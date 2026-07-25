@@ -431,7 +431,7 @@ class DoctorLibTests(unittest.TestCase):
         self.assertIn(
             {
                 "path": "junction",
-                "reason": "symlink or reparse directory not followed",
+                "reason": "symlink or reparse filesystem entry not followed",
             },
             result["skipped"],
         )

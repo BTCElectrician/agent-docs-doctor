@@ -158,9 +158,9 @@ jobs:
           sdist_path="$(find "$RUNNER_TEMP/agent-docs-doctor-dist" -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
           test -n "$wheel_path"
           test -n "$sdist_path"
-          uv pip install --python "$RUNNER_TEMP/wheel-smoke/bin/python" --offline --no-deps "$wheel_path"
-          uv pip install --python "$RUNNER_TEMP/sdist-smoke/bin/python" --offline "setuptools==77.0.3" "wheel==0.45.1"
-          uv pip install --python "$RUNNER_TEMP/sdist-smoke/bin/python" --offline --no-build-isolation --no-deps "$sdist_path"
+          uv pip install --link-mode copy --python "$RUNNER_TEMP/wheel-smoke/bin/python" --offline --no-deps "$wheel_path"
+          uv pip install --link-mode copy --python "$RUNNER_TEMP/sdist-smoke/bin/python" --offline "setuptools==77.0.3" "wheel==0.45.1"
+          uv pip install --link-mode copy --python "$RUNNER_TEMP/sdist-smoke/bin/python" --offline --no-build-isolation --no-deps "$sdist_path"
           "$RUNNER_TEMP/wheel-smoke/bin/python" -m agent_docs_doctor.cli --version
           "$RUNNER_TEMP/wheel-smoke/bin/python" -m agent_docs_doctor.cli doctor
           "$RUNNER_TEMP/wheel-smoke/bin/python" -m agent_docs_doctor.cli audit fixtures/healthy-repo --format text
@@ -178,9 +178,9 @@ jobs:
           if ($null -eq $sdist) { throw "built source archive not found" }
           $wheelPython = "$env:RUNNER_TEMP/wheel-smoke/Scripts/python.exe"
           $sdistPython = "$env:RUNNER_TEMP/sdist-smoke/Scripts/python.exe"
-          uv pip install --python $wheelPython --offline --no-deps $wheel.FullName
-          uv pip install --python $sdistPython --offline "setuptools==77.0.3" "wheel==0.45.1"
-          uv pip install --python $sdistPython --offline --no-build-isolation --no-deps $sdist.FullName
+          uv pip install --link-mode copy --python $wheelPython --offline --no-deps $wheel.FullName
+          uv pip install --link-mode copy --python $sdistPython --offline "setuptools==77.0.3" "wheel==0.45.1"
+          uv pip install --link-mode copy --python $sdistPython --offline --no-build-isolation --no-deps $sdist.FullName
           & $wheelPython -m agent_docs_doctor.cli --version
           & $wheelPython -m agent_docs_doctor.cli doctor
           & $wheelPython -m agent_docs_doctor.cli audit fixtures/healthy-repo --format text

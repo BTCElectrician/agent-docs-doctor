@@ -22,7 +22,7 @@ from typing import Any
 from .version import __version__
 
 try:
-    import tomllib
+    import tomllib  # pyright: ignore[reportMissingImports]
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility path
     tomllib = None  # type: ignore[assignment]
 
@@ -162,7 +162,12 @@ def _file_identity(info: os.stat_result) -> tuple[int, int] | None:
     return device, inode
 
 
-def _same_file_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
+def _same_file_snapshot(
+    left: os.stat_result,
+    right: os.stat_result,
+    *,
+    compare_change_time: bool = True,
+) -> bool:
     left_identity = _file_identity(left)
     right_identity = _file_identity(right)
     identity_matches = (
@@ -174,9 +179,81 @@ def _same_file_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
         identity_matches
         and left.st_size == right.st_size
         and getattr(left, "st_mtime_ns", None) == getattr(right, "st_mtime_ns", None)
-        and getattr(left, "st_ctime_ns", None) == getattr(right, "st_ctime_ns", None)
+        and (
+            not compare_change_time
+            or getattr(left, "st_ctime_ns", None) == getattr(right, "st_ctime_ns", None)
+        )
         and getattr(left, "st_nlink", None) == getattr(right, "st_nlink", None)
     )
+
+
+def _windows_handle_resolved_path(handle: int) -> Path | None:
+    """Return the final path for an already opened Windows handle."""
+
+    if os.name != "nt":
+        return None
+    try:  # pragma: no cover - exercised by the hosted Windows matrix
+        import ctypes
+
+        _create_file, get_final_path, _close_handle, _get_attributes = _windows_directory_functions()
+        buffer = ctypes.create_unicode_buffer(32_768)
+        length = get_final_path(
+            handle,
+            buffer,
+            len(buffer),
+            0,
+        )
+        if length <= 0 or length >= len(buffer):
+            return None
+        value = buffer.value
+        if value.startswith("\\\\?\\UNC\\"):
+            value = "\\\\" + value[8:]
+        elif value.startswith("\\\\?\\"):
+            value = value[4:]
+        return Path(value)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _windows_directory_functions() -> tuple[Any, Any, Any, Any]:
+    if os.name != "nt":
+        raise OSError("Windows directory APIs are unavailable")
+    try:  # pragma: no cover - exercised by the hosted Windows matrix
+        import ctypes
+        from ctypes import wintypes
+
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            raise OSError("Windows directory APIs are unavailable")
+        kernel32 = windll.kernel32
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        get_final_path = kernel32.GetFinalPathNameByHandleW
+        get_final_path.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        get_final_path.restype = wintypes.DWORD
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+        get_attributes = kernel32.GetFileAttributesW
+        get_attributes.argtypes = [wintypes.LPCWSTR]
+        get_attributes.restype = wintypes.DWORD
+        return create_file, get_final_path, close_handle, get_attributes
+    except (AttributeError, OSError, ValueError) as exc:
+        raise OSError("Windows directory APIs are unavailable") from exc
 
 
 def _descriptor_resolved_path(descriptor: int) -> Path | None:
@@ -197,25 +274,10 @@ def _descriptor_resolved_path(descriptor: int) -> Path | None:
             return None
     if os.name == "nt":  # pragma: no cover - exercised by the hosted Windows matrix
         try:
-            import ctypes
             import msvcrt
 
             handle = msvcrt.get_osfhandle(descriptor)
-            buffer = ctypes.create_unicode_buffer(32_768)
-            length = ctypes.windll.kernel32.GetFinalPathNameByHandleW(
-                handle,
-                buffer,
-                len(buffer),
-                0,
-            )
-            if length <= 0 or length >= len(buffer):
-                return None
-            value = buffer.value
-            if value.startswith("\\\\?\\UNC\\"):
-                value = "\\\\" + value[8:]
-            elif value.startswith("\\\\?\\"):
-                value = value[4:]
-            return Path(value)
+            return _windows_handle_resolved_path(handle)
         except (AttributeError, OSError, ValueError):
             return None
     return None
@@ -278,6 +340,7 @@ def read_bounded_input(
         expected = initial
 
     flags = os.O_RDONLY
+    flags |= getattr(os, "O_BINARY", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -287,7 +350,18 @@ def read_bounded_input(
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
             raise ValueError("input is not a regular file")
-        if not _same_file_snapshot(expected, opened):
+        identity = _file_identity(opened)
+        if identity is not None and identity in forbidden_identities:
+            raise ValueError("input aliases a secret-like file")
+        # Check the opened descriptor before comparing pathname metadata.
+        # Windows directory-entry metadata can under-report a hard-link count.
+        if int(getattr(opened, "st_nlink", 1)) > 1:
+            raise ValueError("hard-linked input is excluded by the never-read boundary")
+        if not _same_file_snapshot(
+            expected,
+            opened,
+            compare_change_time=os.name != "nt",
+        ):
             raise ValueError("input changed before it could be read")
         descriptor_path = _descriptor_resolved_path(descriptor)
         if resolved_allowed_root is not None:
@@ -303,14 +377,6 @@ def read_bounded_input(
                 raise ValueError("opened input path changed while it was being verified")
             if is_secret_path(relative_actual):
                 raise ValueError("opened input targets a secret-like path")
-        identity = _file_identity(opened)
-        if identity is not None and identity in forbidden_identities:
-            raise ValueError("input aliases a secret-like file")
-        # When a platform reports multiple names but cannot supply a usable
-        # identity, and for aliases not known during discovery, failing closed
-        # prevents a secret-named hard link from being read through a safe name.
-        if int(getattr(opened, "st_nlink", 1)) > 1:
-            raise ValueError("hard-linked input is excluded by the never-read boundary")
         size = int(opened.st_size)
         if size > max_bytes:
             raise ValueError(f"input exceeds {max_bytes} byte read limit")
@@ -642,19 +708,8 @@ def _open_pinned_directory(path: Path, allowed_root: Path) -> tuple[int | Path, 
     # path-based enumeration is in progress.
     try:  # pragma: no cover - exercised by the hosted Windows matrix
         import ctypes
-        from ctypes import wintypes
 
-        create_file = ctypes.windll.kernel32.CreateFileW
-        create_file.argtypes = [
-            wintypes.LPCWSTR,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            wintypes.LPVOID,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            wintypes.HANDLE,
-        ]
-        create_file.restype = wintypes.HANDLE
+        create_file, _get_final_path, close_native_handle, get_attributes = _windows_directory_functions()
         handle = create_file(
             os.fspath(path),
             0x80,  # FILE_READ_ATTRIBUTES
@@ -665,42 +720,34 @@ def _open_pinned_directory(path: Path, allowed_root: Path) -> tuple[int | Path, 
             None,
         )
         invalid_handle = ctypes.c_void_p(-1).value
-        if handle in (None, invalid_handle):
+        handle_value = getattr(handle, "value", handle)
+        if handle_value in (None, invalid_handle):
             raise OSError("directory could not be pinned")
-
-        buffer = ctypes.create_unicode_buffer(32_768)
-        length = ctypes.windll.kernel32.GetFinalPathNameByHandleW(
-            handle,
-            buffer,
-            len(buffer),
-            0,
-        )
-        if length <= 0 or length >= len(buffer):
-            ctypes.windll.kernel32.CloseHandle(handle)
-            raise OSError("pinned directory path could not be verified")
-        actual_path = buffer.value
-        if actual_path.startswith("\\\\?\\UNC\\"):
-            actual_path = "\\\\" + actual_path[8:]
-        elif actual_path.startswith("\\\\?\\"):
-            actual_path = actual_path[4:]
-        actual = Path(os.path.abspath(actual_path))
-        expected = Path(os.path.abspath(os.fspath(path)))
+        handle_value = int(handle_value)
         try:
-            actual.relative_to(Path(os.path.abspath(os.fspath(allowed_root))))
-        except ValueError:
-            ctypes.windll.kernel32.CloseHandle(handle)
-            raise OSError("pinned directory escaped the audit root") from None
-        if os.path.normcase(os.fspath(actual)) != os.path.normcase(os.fspath(expected)):
-            ctypes.windll.kernel32.CloseHandle(handle)
-            raise OSError("directory path contains an alias or changed while opening")
+            resolved_handle_path = _windows_handle_resolved_path(handle_value)
+            if resolved_handle_path is None:
+                raise OSError("pinned directory path could not be verified")
+            actual = Path(os.path.abspath(os.fspath(resolved_handle_path)))
+            expected = Path(os.path.abspath(os.fspath(path)))
+            try:
+                actual.relative_to(Path(os.path.abspath(os.fspath(allowed_root))))
+            except ValueError:
+                raise OSError("pinned directory escaped the audit root") from None
+            if os.path.normcase(os.fspath(actual)) != os.path.normcase(os.fspath(expected)):
+                raise OSError("directory path contains an alias or changed while opening")
 
-        attributes = ctypes.windll.kernel32.GetFileAttributesW(os.fspath(path))
-        if attributes == 0xFFFFFFFF or not attributes & 0x10 or attributes & 0x400:
-            ctypes.windll.kernel32.CloseHandle(handle)
-            raise OSError("filesystem entry is not a safe directory")
+            attributes = get_attributes(os.fspath(path))
+            if attributes == 0xFFFFFFFF or not attributes & 0x10 or attributes & 0x400:
+                raise OSError("filesystem entry is not a safe directory")
+        except BaseException as exc:
+            if not close_native_handle(handle_value):
+                raise OSError("unverified directory pin could not be closed") from exc
+            raise
 
         def close_handle() -> None:
-            ctypes.windll.kernel32.CloseHandle(handle)
+            if not close_native_handle(handle_value):
+                raise OSError("pinned directory handle could not be closed")
 
         return path, close_handle
     except (AttributeError, OSError, ValueError) as exc:
@@ -1805,6 +1852,29 @@ def _collect_inventory(root_value: str | Path) -> dict[str, Any]:
             paths.append(candidate)
             imported_paths.add(relative_candidate)
             queue.append((candidate, next_depth, True))
+
+    hardlink_warnings = {
+        "file aliases a secret-like file",
+        "hard-linked file is excluded by the never-read boundary",
+    }
+    excluded_hardlinks = {
+        path for path in paths if read_results.get(path, (None, None, None, None))[3] in hardlink_warnings
+    }
+    if excluded_hardlinks:
+        for path in excluded_hardlinks:
+            relative = PurePosixPath(path.relative_to(root).as_posix())
+            skipped.append(
+                {
+                    "path": relative.as_posix(),
+                    "reason": "hard-linked candidate excluded by never-read boundary",
+                }
+            )
+            matcher.coverage_reasons.add("hard-linked candidate not inspected")
+            path_set.discard(path)
+            read_results.pop(path, None)
+            imported_paths.discard(relative)
+        paths = [path for path in paths if path not in excluded_hardlinks]
+        skipped.sort(key=lambda item: item["path"])
 
     paths.sort(key=lambda path: path.relative_to(root).as_posix())
     selected_codex: set[str] = set()

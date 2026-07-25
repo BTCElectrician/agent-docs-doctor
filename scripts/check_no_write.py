@@ -77,14 +77,19 @@ def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     )
 
 
-def _same_file_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
+def _same_file_snapshot(
+    left: os.stat_result,
+    right: os.stat_result,
+    *,
+    compare_change_time: bool = True,
+) -> bool:
     return (
         _same_file_identity(left, right)
         and stat.S_IFMT(left.st_mode) == stat.S_IFMT(right.st_mode)
         and left.st_size == right.st_size
         and left.st_nlink == right.st_nlink
         and left.st_mtime_ns == right.st_mtime_ns
-        and left.st_ctime_ns == right.st_ctime_ns
+        and (not compare_change_time or left.st_ctime_ns == right.st_ctime_ns)
     )
 
 
@@ -100,7 +105,11 @@ def _walk_without_links(root: Path) -> list[tuple[Path, os.stat_result]]:
             visible_before = directory.lstat()
         except OSError as exc:
             raise SnapshotLimitError("filesystem snapshot directory changed before traversal") from exc
-        if not _same_file_snapshot(expected_directory, visible_before):
+        if not _same_file_snapshot(
+            expected_directory,
+            visible_before,
+            compare_change_time=os.name != "nt",
+        ):
             raise SnapshotLimitError("filesystem snapshot directory changed before traversal")
         remaining = MAX_SNAPSHOT_ENTRIES - len(paths)
         try:
@@ -110,7 +119,11 @@ def _walk_without_links(root: Path) -> list[tuple[Path, os.stat_result]]:
         entries: list[tuple[str, os.stat_result]] = []
         try:
             pinned = os.fstat(scan_target) if isinstance(scan_target, int) else directory.lstat()
-            if not _same_file_snapshot(expected_directory, pinned):
+            if not _same_file_snapshot(
+                expected_directory,
+                pinned,
+                compare_change_time=os.name != "nt",
+            ):
                 raise SnapshotLimitError("filesystem snapshot directory changed before traversal")
             with os.scandir(scan_target) as iterator:
                 for entry in islice(iterator, remaining + 1):
@@ -126,10 +139,11 @@ def _walk_without_links(root: Path) -> list[tuple[Path, os.stat_result]]:
                 pinned_after = os.fstat(scan_target) if isinstance(scan_target, int) else visible_after
             except OSError as exc:
                 raise SnapshotLimitError("filesystem snapshot directory changed during traversal") from exc
-            if not _same_file_snapshot(expected_directory, visible_after) or not _same_file_snapshot(
-                pinned,
-                pinned_after,
-            ):
+            if not _same_file_snapshot(
+                expected_directory,
+                visible_after,
+                compare_change_time=os.name != "nt",
+            ) or not _same_file_snapshot(pinned, pinned_after):
                 raise SnapshotLimitError("filesystem snapshot directory changed during traversal")
         finally:
             close_pinned()
@@ -166,7 +180,11 @@ def _open_verified_entry(
         expected_kind = stat.S_ISDIR if directory else stat.S_ISREG
         if not expected_kind(opened.st_mode):
             raise SnapshotLimitError("filesystem snapshot entry changed type")
-        if not _same_file_snapshot(opened, expected):
+        if not _same_file_snapshot(
+            opened,
+            expected,
+            compare_change_time=os.name != "nt",
+        ):
             raise SnapshotLimitError("filesystem snapshot entry changed while opening")
         descriptor_path = _descriptor_resolved_path(descriptor)
         if descriptor_path is None:
@@ -326,7 +344,11 @@ def _xattrs(
             entry_value_bytes += written
             consumed_bytes += written
             values.append((name, hashlib.sha256(raw).hexdigest()))
-        if not _same_file_snapshot(expected, os.fstat(descriptor)):
+        if not _same_file_snapshot(
+            expected,
+            os.fstat(descriptor),
+            compare_change_time=os.name != "nt",
+        ):
             raise SnapshotLimitError("filesystem snapshot entry changed during xattr capture")
         return tuple(values), consumed_bytes
     finally:
@@ -345,7 +367,11 @@ def _snapshot_entry(
         value = path.lstat()
     except OSError as exc:
         raise SnapshotLimitError("filesystem snapshot entry changed before capture") from exc
-    if not _same_file_snapshot(expected, value):
+    if not _same_file_snapshot(
+        expected,
+        value,
+        compare_change_time=os.name != "nt",
+    ):
         raise SnapshotLimitError("filesystem snapshot entry changed before capture")
     kind = _kind(value)
     relative = "." if path == root else path.relative_to(root).as_posix()

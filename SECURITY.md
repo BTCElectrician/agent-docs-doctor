@@ -49,7 +49,15 @@ backups are retained for manual recovery and are never automatically deleted.
 Tool-managed bytes are hash-bound. User-owned extra file bytes are preserved but never opened;
 their path, identity, type, size, mode, link count, and change/modify metadata are bound instead.
 Multiply-linked managed files are rejected without reading their contents. Bundled skill resources
-must come from the currently executing source checkout or installed distribution.
+must come from the currently executing source checkout or installed distribution. An installed
+distribution is bound through one bounded, immutable wheel `RECORD` snapshot that must identify
+the executing module and every exact allowlisted resource, byte count, and SHA-256. Windows
+preview holds native non-delete-sharing directory handles and non-write-sharing file handles after
+capturing their identities. Bound files with multiple links are rejected before content read in
+every source mode. The documented `uv` installation uses copy mode to preserve this boundary.
+Wheel `RECORD` is an integrity manifest, not an authenticity signature. A singly linked expected
+package path already altered before identity capture requires a bounded read to detect its digest
+mismatch and is then rejected.
 
 Creation, rollback, interruption recovery, and cleanup are identity-bound. If a tool-created
 private directory cannot be proved still visible, empty, and identical, the operation fails and

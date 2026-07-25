@@ -40,9 +40,9 @@ publish launch messaging or media.
 
 ## Acceptance evidence
 
-- 180 unit, fixture, resource-bound, validator, traversal, privacy, no-write, public-safety, and
-  installer-race tests pass locally; one Windows-only junction test is skipped on macOS and is
-  exercised by the hosted Windows matrix.
+- 184 unit, fixture, resource-bound, validator, traversal, privacy, no-write, public-safety, and
+  installer-race tests pass locally; three Windows-only junction/audit-pinning/installer-pinning
+  tests are skipped on macOS and exercised by the hosted Windows matrix.
 - Ruff, Pyright, cache-free syntax checks, both report-validator paths, the official skill
   validator, JSON Schema validation, cross-hash-seed determinism, no-write comparison, UBS, public
   safety scanning, package build and archive parity, and isolated wheel/source installation are
@@ -50,9 +50,11 @@ publish launch messaging or media.
 - Targeted adversarial probes cover ignored control files, secret aliases, secret-like path
   components, hostile references and Unicode display paths, unavailable descriptor resolution,
   FIFOs and non-regular files, symlink and directory-replacement races, managed hardlinks,
-  pre-identity and post-rename interruption recovery, installer preview/apply changes, backup
-  collisions, rollback cleanup, deduplicated aggregate-capped import expansion, malformed reports,
-  and bounded repeated-pattern scans.
+  bounded distribution-`RECORD` provenance, never-read bundled hardlinks, Windows binary reads and
+  cross-provider metadata comparisons, identity-pinned source replacements, pre-identity and
+  post-rename interruption recovery, installer preview/apply changes, backup collisions, rollback
+  cleanup, deduplicated aggregate-capped import expansion, malformed reports, and bounded
+  repeated-pattern scans.
 - Local passing gates are evidence, not proof of all host or filesystem behavior. The exact pushed
   commit must also pass all Linux, macOS, and Windows jobs on Python 3.10 and 3.13.
 

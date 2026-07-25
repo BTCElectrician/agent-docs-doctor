@@ -20,7 +20,12 @@ class ReportInputError(ValueError):
     """A privacy-safe report input or decoding failure."""
 
 
-def _same_file_snapshot(before: os.stat_result, after: os.stat_result) -> bool:
+def _same_file_snapshot(
+    before: os.stat_result,
+    after: os.stat_result,
+    *,
+    compare_change_time: bool = True,
+) -> bool:
     before_inode = getattr(before, "st_ino", 0)
     after_inode = getattr(after, "st_ino", 0)
     before_device = getattr(before, "st_dev", 0)
@@ -34,7 +39,10 @@ def _same_file_snapshot(before: os.stat_result, after: os.stat_result) -> bool:
         identity_matches
         and before.st_size == after.st_size
         and getattr(before, "st_mtime_ns", None) == getattr(after, "st_mtime_ns", None)
-        and getattr(before, "st_ctime_ns", None) == getattr(after, "st_ctime_ns", None)
+        and (
+            not compare_change_time
+            or getattr(before, "st_ctime_ns", None) == getattr(after, "st_ctime_ns", None)
+        )
     )
 
 
@@ -84,7 +92,11 @@ def read_report_file(path: Path) -> bytes:
             raise ReportInputError("report input must be a regular file")
         if opened.st_nlink != 1:
             raise ReportInputError("report input must not be multiply linked")
-        if not _same_file_snapshot(before, opened):
+        if not _same_file_snapshot(
+            before,
+            opened,
+            compare_change_time=os.name != "nt",
+        ):
             raise ReportInputError("report file changed while it was being opened; try again")
         if opened.st_size > MAX_REPORT_BYTES:
             raise ReportInputError(f"report exceeds the {MAX_REPORT_BYTES} byte validation limit")
