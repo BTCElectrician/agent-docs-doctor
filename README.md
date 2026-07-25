@@ -1,5 +1,9 @@
 # Agent Docs Doctor
 
+<p align="center">
+  <img src="docs/assets/agent-docs-doctor-hero.webp" alt="Agent Docs Doctor by Ohmni Oracle — audit the rules before they steer the agent" width="100%">
+</p>
+
 Your coding agent may be following more repository instructions than you realize—and some may be
 stale, duplicated, or competing for authority.
 
