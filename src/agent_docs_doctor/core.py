@@ -937,6 +937,18 @@ def _directory_entry_records_match(
     return sorted(map(stable_fields, left)) == sorted(map(stable_fields, right))
 
 
+def _directory_entry_stat(directory: Path, entry: os.DirEntry[str]) -> os.stat_result:
+    """Return uncached Windows identity fields while retaining POSIX dir pins."""
+
+    if os.name == "nt":
+        # DirEntry.stat() deliberately reports zero for st_dev, st_ino, and
+        # st_nlink on Windows. A path-based stat provides the identity fields
+        # needed for replacement and hard-link checks; the held directory
+        # handle is revalidated around both enumerations.
+        return os.stat(directory / entry.name, follow_symlinks=False)
+    return entry.stat(follow_symlinks=False)
+
+
 def is_candidate(relative: PurePosixPath, fallback_names: frozenset[str] = frozenset()) -> bool:
     if is_secret_path(relative):
         return False
@@ -1149,7 +1161,7 @@ def walk_candidates(
                         overflow = True
                         break
                     try:
-                        entry_info = entry.stat(follow_symlinks=False)
+                        entry_info = _directory_entry_stat(current_path, entry)
                         link_like = entry.is_symlink() or _stat_is_reparse_point(entry_info)
                     except OSError:
                         entry_info = None
@@ -1163,7 +1175,7 @@ def walk_candidates(
                             overflow = True
                             break
                         try:
-                            entry_info = entry.stat(follow_symlinks=False)
+                            entry_info = _directory_entry_stat(current_path, entry)
                             link_like = entry.is_symlink() or _stat_is_reparse_point(entry_info)
                         except OSError:
                             entry_info = None

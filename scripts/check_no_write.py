@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from agent_docs_doctor import build_audit, validate_audit  # noqa: E402
 from agent_docs_doctor.core import (  # noqa: E402
     _descriptor_resolved_path,
+    _directory_entry_stat,
     _existing_path_within_root,
     _open_pinned_directory,
     _open_windows_file_descriptor,
@@ -161,7 +162,7 @@ def _walk_without_links(root: Path) -> list[tuple[Path, os.stat_result]]:
             with os.scandir(scan_target) as iterator:
                 for entry in islice(iterator, remaining + 1):
                     try:
-                        entry_info = entry.stat(follow_symlinks=False)
+                        entry_info = _directory_entry_stat(directory, entry)
                     except OSError as exc:
                         raise SnapshotLimitError(
                             "filesystem snapshot entry changed during traversal"
@@ -172,7 +173,7 @@ def _walk_without_links(root: Path) -> list[tuple[Path, os.stat_result]]:
                 with os.scandir(scan_target) as iterator:
                     for entry in islice(iterator, remaining + 1):
                         try:
-                            entry_info = entry.stat(follow_symlinks=False)
+                            entry_info = _directory_entry_stat(directory, entry)
                         except OSError as exc:
                             raise SnapshotLimitError(
                                 "filesystem snapshot entry changed during traversal"

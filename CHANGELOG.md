@@ -86,6 +86,9 @@
   concurrent write/delete access; audit-directory identity handles declare the exact Win32
   `HANDLE` API types and are revalidated before and after enumeration, including when the hosted
   Windows runtime permits rename while the handle remains open.
+- Windows audit and no-write traversal refresh each enumerated entry with path-based metadata
+  before identity, link-count, and replacement checks because cached `DirEntry` metadata omits
+  those fields on Windows.
 - POSIX reads and directory enumeration require descriptor-path resolution, exact intended-path
   equality, and requested-root containment before consuming bytes or entries.
 - Secret-like path components and multiply-linked candidates are excluded from reads.
