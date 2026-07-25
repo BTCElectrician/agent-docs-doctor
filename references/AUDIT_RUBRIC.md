@@ -7,6 +7,7 @@ Use a nonnumeric evidence matrix. Severity communicates review urgency, not a sc
 - [Evidence classes](#evidence-classes)
 - [Severity](#severity)
 - [Finding requirements](#finding-requirements)
+- [Coverage gate](#coverage-gate)
 - [Diagnosis prompts](#diagnosis-prompts)
 - [Preservation gate](#preservation-gate)
 
@@ -47,6 +48,25 @@ Every finding must contain:
 10. validation or evaluation needed before adoption.
 
 Reject findings that merely say a file is "too long," "duplicated," or "confusing" without loading scope, impact, and evidence.
+
+## Coverage gate
+
+Read `coverage.status`, bounded skip records, and warnings before interpreting absence. `complete`
+means complete only within the declared candidate and default-exclusion scope; it is not a
+whole-repository content scan. Custom-ignored candidates or directories, unreadable traversal
+points, non-regular candidates, concurrent disappearance, and exhausted traversal, read,
+reference, paragraph, finding, location, or skip caps make coverage partial.
+
+When coverage is partial:
+
+- identify the exact omitted scope or exhausted evidence class;
+- treat claims about that area as unknown;
+- do not say there are no conflicts, stale authorities, leaks, or other issues across the whole
+  repository;
+- stabilize the checkout, narrow the input, or obtain owner-approved access before rerunning; and
+- keep the limitation adjacent to every conclusion that depends on missing evidence.
+
+Schema-valid JSON proves conformance, not coverage completeness or documentation health.
 
 ## Diagnosis prompts
 

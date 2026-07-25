@@ -11,6 +11,10 @@ Audit the instruction system around a repository, not just one file. Build an ev
 
 - Treat the repository as read-only unless the user explicitly approves a proposed rewrite or migration.
 - Inspect recognized agent-facing surfaces only. Do not open secret-like files, credential stores, private keys, or ignored paths.
+- Treat a secret-like name in any relative path component as a never-read boundary.
+- Treat `inventory`, `audit`, `doctor`, and `validate-report` as distinct from user-level skill
+  installation. Never imply that an audit approval authorizes `install-skill` or `uninstall-skill`,
+  or that an installer plan authorizes repository edits.
 - Distinguish platform-verified loading behavior from filename-based inference. Read [references/PLATFORM_BEHAVIOR.md](references/PLATFORM_BEHAVIOR.md) when platform loading or precedence affects a finding.
 - Preserve production, deployment, destructive-operation, privacy, authentication, financial, legal, health, data-integrity, ownership, rollback, and incident-derived safeguards.
 - Label deterministic evidence, model judgment, uncertainty, and user decisions separately.
@@ -37,7 +41,22 @@ available, stop and tell the user to repair or install the package; do not impro
 scanner. Keep any explicitly requested saved report outside the audited repository unless the user
 chooses a path inside it.
 
-Review skipped files, warnings, discovered surfaces, exact-overlap groups, local references, archive classification, and deterministic findings. The ledger omits overlap paragraph bodies and sanitizes absolute-style reference targets. Default-pruned directories are reported in `skipped`; only `.agent-docs-doctorignore` can restore one with an explicit negation such as `!fixtures/`. Oversized ignore controls fail closed before the walk. A skipped or unreadable file is an audit limitation, not proof that it is irrelevant.
+Review skipped files, warnings, discovered surfaces, exact-overlap groups, local references, archive
+classification, and deterministic findings. The ledger omits overlap paragraph bodies, emits only
+a fixed privacy-safe frontmatter summary, and masks absolute and out-of-root reference targets.
+Secret-like names and multiply-linked candidate files are not opened.
+
+Default-pruned directories are reported in `skipped`; only `.agent-docs-doctorignore` can restore
+one with an explicit negation such as `!fixtures/`. Oversized ignore controls fail closed before
+the walk. Traversal entries, read bytes, candidates, ignore rules, imports, references, paragraph
+blocks, findings, finding locations, and skip evidence are bounded. The active values are in
+`engine.configuration` and `coverage.limits`.
+
+Interpret `coverage.status: complete` only within the engine's declared discovery scope. A custom
+ignored candidate or directory, unreadable traversal point, concurrent disappearance, non-regular
+candidate, or exhausted cap makes coverage partial. A partial or skipped audit is a limitation,
+not proof that omitted material is irrelevant or safe. Do not give a clean bill of health from an
+incomplete scan.
 
 Recognized `CLAUDE.md` imports are typed automatic-import edges. The engine inventories safe,
 in-root imported files even when their filenames would not otherwise match discovery heuristics.
@@ -48,9 +67,25 @@ Treat a repository that changes during collection as a potentially mixed snapsho
 external evidence suggest concurrent mutation, rerun against a stable checkout before relying on
 the ledger for a consequential decision.
 
-The supported installer keeps this skill outside the repository being audited. Do not clone the
-full project into a repository-level skill folder, because the project's own documentation would
-then become legitimate audit evidence. Other installed repository skills remain in scope.
+On POSIX, reads and directory enumeration fail closed unless the opened descriptor resolves to the
+exact intended path under the requested root. Non-printing Unicode paths are represented only by
+one-way hash markers in evidence displays. Automatic-import expansion is deduplicated and bounded
+by the aggregate reference cap; exhaustion makes coverage partial.
+
+The supported installer keeps this skill outside the repository being audited. Its preview is
+portable, no-write, and emits a deterministic current-plan fingerprint. Applying an install,
+update, or uninstall is an explicit user-level mutation and requires
+`--apply PLAN_TOKEN_FROM_PREVIEW`; it is not part of the audit. The fingerprint binds the payload,
+action, client, resolved destination, ancestor identities, expected state, and backup reservation,
+and proves current state equality rather than prior human review. Apply uses descriptor-relative
+operations on supported Darwin/Linux runtimes and fails closed elsewhere. The installer rejects
+unmanaged or aliased destinations and preserves managed updates or uninstalls in tool-reserved
+backup containers that it never automatically deletes. Preserved extra contents may remain
+user-owned.
+
+Do not clone the full project into a repository-level skill folder, because the project's own
+documentation would then become legitimate audit evidence. Other installed repository skills
+remain in scope.
 
 ### 3. Reconstruct the instruction architecture
 

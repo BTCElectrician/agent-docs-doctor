@@ -64,34 +64,33 @@ Every release must retain these invariants:
   factually, but it endorses no provider and does not use model-review provenance as a product
   claim.
 
-## Why the next release is needed
+## Why the 0.3.0 hardening release is needed
 
-The current release has strong foundations:
+The release closes the code-side correctness and safety gaps that remained in 0.2.0:
 
-- 88 unit and fixture tests in the current release candidate;
-- an 8-of-8 qualitative fixture acceptance set;
-- a two-step preview/apply boundary;
-- deterministic relative-path JSON with explicit limitations;
-- hardened ignore, symlink, secret-name, resource, and privacy behavior; and
-- a useful human contract built around stable decision IDs.
+- source checkout and built wheel/source-archive invocation paths now share an installable console
+  command and byte-matched bundled public resources;
+- recognized automatic imports are typed, bounded, and inventoried only through the same
+  ignore/secret/root/regular-file protections as direct candidates;
+- generated reports have complete nested validation, a bounded regular-file input contract, and
+  explicit `complete` or `partial` coverage;
+- audit traversal, ignore matching, reference extraction, Markdown/frontmatter processing, and
+  public-file scanning have deterministic resource ceilings;
+- the no-write proof pins traversal and reads to verified filesystem identities and reports its
+  metadata-only boundaries;
+- skill installer apply is separated from audit, bound to the current preview state, restricted to
+  secure descriptor-relative Darwin/Linux operation, interruption-recoverable, and
+  backup-preserving; and
+- the repository has a pinned, locked six-platform CI workflow, public-safety scan, package parity
+  check, and isolated wheel/source smoke tests.
 
-The current adoption and correctness gaps are concrete:
+The remaining gaps are release and adoption evidence, not hidden implementation promises:
 
-1. The documented install clones the full repository into the target repository, creating a nested
-   Git checkout and dirtying the user's worktree before the audit begins.
-2. `pyproject.toml` declares project metadata but the repository cannot currently build an
-   installable wheel: package discovery fails on the flat repository layout.
-3. The direct CLI is a source-tree script and its useful default output is raw JSON; the excellent
-   short decision experience depends on a correctly installed skill.
-4. A recognized automatic import such as `CLAUDE.md` importing `POLICY.md` is recorded as a
-   reference, but the imported file is not inventoried unless its filename independently matches a
-   discovery heuristic.
-5. Report validation checks required top-level structure but does not fully validate nested
-   references, overlap occurrences, skipped entries, and finding locations.
-6. Nested ignore-control reads need a documented and tested rule when an inherited ignore pattern
-   excludes the control file itself.
-7. The public repository has no automated workflow, tagged release, description, topics, social
-   image, or visual product proof.
+1. PyPI publication, a tag, and a GitHub release require separate operator authorization.
+2. Live-user first-run comprehension and maintainer pilots remain unperformed.
+3. Public media, repository social metadata, and launch messaging remain separate work.
+4. Installer apply intentionally does not support Windows until equivalent race-resistant
+   descriptor-relative semantics and adversarial acceptance evidence exist.
 
 ## North-star experience
 
@@ -327,7 +326,8 @@ Do not build these without repeated user evidence:
 The world-class release is ready only when:
 
 - a clean machine can install and run the built wheel on Linux, macOS, and Windows;
-- installation and audit leave the target repository byte-for-byte unchanged;
+- installation and audit leave every recorded target-repository filesystem entry and attribute
+  unchanged; this before/after proof is not a system-call trace;
 - time to first useful decision review is under three minutes;
 - five of five fresh users understand that `preview` is read-only and later approval is required;
 - the eight public behavioral fixtures still pass;

@@ -115,6 +115,29 @@ The public `anthropics/skills` repository is not uniformly permissively licensed
 
 Sources: [Agent Skills specification](https://agentskills.io/specification), [agentskills/agentskills](https://github.com/agentskills/agentskills), and [anthropics/skills](https://github.com/anthropics/skills).
 
+### Agent Docs Doctor installer boundary
+
+The client paths above describe expected user-level discovery locations, not permission to write
+them. Agent Docs Doctor 0.3.0 previews one resolved client destination and emits a deterministic
+current-plan fingerprint for apply. The fingerprint proves current state equality, not prior human
+review. Preview is portable and no-write; apply uses descriptor-relative operations on supported
+Darwin/Linux runtimes and fails closed elsewhere. It rejects unmanaged destinations and existing
+symlink, junction, or reparse-point ancestors; updates and uninstalls retain the entire prior
+managed destination in a tool-reserved backup container that is never automatically deleted.
+Preserved extra contents may remain user-owned. If a catchable interruption lands after private
+directory creation but before identity capture, apply fails with an explicit
+unconfirmed-private-residue diagnostic rather than removing a pathname whose ownership cannot be
+proved.
+
+On POSIX audit platforms, descriptor-path verification is mandatory for candidate reads and
+directory enumeration. The descriptor must resolve to the exact intended path under the requested
+root; unavailable resolution, ancestor aliases, and concurrent path replacement fail closed before
+bytes or directory entries are consumed. Non-printing Unicode path displays are hash-only.
+
+That installer operation is not an audit and does not change the repository being audited. It is
+also not a universal platform guarantee: other installers may follow links, overwrite unmanaged
+files, or use different locations.
+
 ## Claims not safe to generalize
 
 - Do not describe guidance thresholds as hard size ceilings.

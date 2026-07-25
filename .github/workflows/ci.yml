@@ -33,45 +33,157 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Install package and development checks
-        run: python -m pip install ".[dev]"
+      - name: Install pinned environment manager
+        run: python -m pip install --disable-pip-version-check "uv==0.10.12"
+
+      - name: Reproduce the locked development environment
+        run: uv sync --frozen --extra dev
 
       - name: Unit and fixture suite
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -B -m unittest discover -s tests -v
+        run: uv run --frozen --no-sync python -B -m pytest -q
 
       - name: Lint and format
         env:
           RUFF_NO_CACHE: "true"
         run: |
-          ruff check src scripts tests
-          ruff format --check src scripts tests
+          uv run --frozen --no-sync ruff check src scripts tests
+          uv run --frozen --no-sync ruff format --check src scripts tests
 
       - name: Type check
-        run: pyright
+        run: uv run --frozen --no-sync pyright
 
       - name: Cache-free syntax check
-        run: python -B scripts/check_python_syntax.py src scripts tests
+        run: uv run --frozen --no-sync python -B scripts/check_python_syntax.py src scripts tests
+
+      - name: JSON Schema 2020-12 contract
+        run: uv run --frozen --no-sync python -B scripts/check_schema_contract.py
 
       - name: CLI contract
         run: |
-          agent-docs-doctor --version
-          agent-docs-doctor doctor
-          agent-docs-doctor audit fixtures/healthy-repo --format text
+          uv run --frozen --no-sync agent-docs-doctor --version
+          uv run --frozen --no-sync agent-docs-doctor doctor
+          uv run --frozen --no-sync agent-docs-doctor audit fixtures/healthy-repo --format text
 
       - name: No-write proof
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -B scripts/check_no_write.py fixtures/healthy-repo
+        run: uv run --frozen --no-sync python -B scripts/check_no_write.py fixtures/healthy-repo
 
       - name: Public safety scan
-        run: python -B scripts/public_safety_scan.py .
+        run: uv run --frozen --no-sync python -B scripts/public_safety_scan.py .
 
-      - name: Minimum build backend
+      - name: Build wheel and source distribution from the locked environment
+        run: uv run --frozen --no-sync python -m build --no-isolation --outdir "${{ runner.temp }}/agent-docs-doctor-dist"
+
+      - name: Verify wheel and source archive public-payload parity
+        shell: python
+        env:
+          ADD_DIST_DIR: ${{ runner.temp }}/agent-docs-doctor-dist
         run: |
-          python -m pip install "setuptools==77.0.3" wheel
-          python -m pip wheel . --no-build-isolation --no-deps --wheel-dir "${{ runner.temp }}/minimum-backend-wheel"
+          import hashlib
+          import os
+          import tarfile
+          import zipfile
+          from pathlib import Path
 
-      - name: Build wheel and source distribution outside the checkout
-        run: python -m build --outdir "${{ runner.temp }}/agent-docs-doctor-dist"
+          dist = Path(os.environ["ADD_DIST_DIR"])
+          wheel = next(dist.glob("*.whl"))
+          source = next(dist.glob("*.tar.gz"))
+          required = {
+              "SKILL.md",
+              "agents/openai.yaml",
+              "references/AUDIT_RUBRIC.md",
+              "references/EVALUATION_PROTOCOL.md",
+              "references/MIGRATION_GUIDE.md",
+              "references/PLATFORM_BEHAVIOR.md",
+              "references/REPORT_SCHEMA.md",
+              "schemas/audit-v1.schema.json",
+              "schemas/audit-v2.schema.json",
+          }
+
+          wheel_payload = {}
+          with zipfile.ZipFile(wheel) as archive:
+              for name in archive.namelist():
+                  marker = "/share/agent-docs-doctor/"
+                  if marker not in name:
+                      continue
+                  relative = name.split(marker, 1)[1]
+                  if relative.startswith("skill/"):
+                      relative = relative.removeprefix("skill/")
+                  if not name.endswith("/"):
+                      wheel_payload[relative] = hashlib.sha256(archive.read(name)).hexdigest()
+
+          source_payload = {}
+          with tarfile.open(source, "r:gz") as archive:
+              for member in archive.getmembers():
+                  parts = Path(member.name).parts
+                  relative = Path(*parts[1:]).as_posix() if len(parts) > 1 else ""
+                  public_source = (
+                      relative == "SKILL.md"
+                      or relative.startswith("agents/")
+                      or relative.startswith("references/")
+                      or relative.startswith("schemas/")
+                  )
+                  if not public_source or not member.isfile():
+                      continue
+                  stream = archive.extractfile(member)
+                  if stream is None:
+                      raise RuntimeError(f"unable to read source payload: {relative}")
+                  source_payload[relative] = hashlib.sha256(stream.read()).hexdigest()
+
+          if not required.issubset(wheel_payload):
+              raise RuntimeError(f"wheel payload missing: {sorted(required - set(wheel_payload))}")
+          if set(wheel_payload) != set(source_payload):
+              raise RuntimeError(
+                  "wheel/source payload names differ: "
+                  f"wheel-only={sorted(set(wheel_payload) - set(source_payload))}, "
+                  f"source-only={sorted(set(source_payload) - set(wheel_payload))}"
+              )
+          if wheel_payload != source_payload:
+              raise RuntimeError("wheel and source public payload bytes differ")
+          print("wheel/source public payload parity passed")
+
+      - name: Create isolated distribution-smoke environments
+        run: |
+          uv venv --python "${{ matrix.python }}" "${{ runner.temp }}/wheel-smoke"
+          uv venv --python "${{ matrix.python }}" "${{ runner.temp }}/sdist-smoke"
+
+      - name: Install and smoke the built distributions (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          wheel_path="$(find "$RUNNER_TEMP/agent-docs-doctor-dist" -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          sdist_path="$(find "$RUNNER_TEMP/agent-docs-doctor-dist" -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          test -n "$wheel_path"
+          test -n "$sdist_path"
+          uv pip install --python "$RUNNER_TEMP/wheel-smoke/bin/python" --offline --no-deps "$wheel_path"
+          uv pip install --python "$RUNNER_TEMP/sdist-smoke/bin/python" --offline "setuptools==77.0.3" "wheel==0.45.1"
+          uv pip install --python "$RUNNER_TEMP/sdist-smoke/bin/python" --offline --no-build-isolation --no-deps "$sdist_path"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m agent_docs_doctor.cli --version
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m agent_docs_doctor.cli doctor
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m agent_docs_doctor.cli audit fixtures/healthy-repo --format text
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m agent_docs_doctor.cli --version
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m agent_docs_doctor.cli doctor
+          "$RUNNER_TEMP/sdist-smoke/bin/python" -m agent_docs_doctor.cli audit fixtures/healthy-repo --format text
+
+      - name: Install and smoke the built distributions (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -Path "$env:RUNNER_TEMP/agent-docs-doctor-dist" -Filter *.whl | Select-Object -First 1
+          $sdist = Get-ChildItem -Path "$env:RUNNER_TEMP/agent-docs-doctor-dist" -Filter *.tar.gz | Select-Object -First 1
+          if ($null -eq $wheel) { throw "built wheel not found" }
+          if ($null -eq $sdist) { throw "built source archive not found" }
+          $wheelPython = "$env:RUNNER_TEMP/wheel-smoke/Scripts/python.exe"
+          $sdistPython = "$env:RUNNER_TEMP/sdist-smoke/Scripts/python.exe"
+          uv pip install --python $wheelPython --offline --no-deps $wheel.FullName
+          uv pip install --python $sdistPython --offline "setuptools==77.0.3" "wheel==0.45.1"
+          uv pip install --python $sdistPython --offline --no-build-isolation --no-deps $sdist.FullName
+          & $wheelPython -m agent_docs_doctor.cli --version
+          & $wheelPython -m agent_docs_doctor.cli doctor
+          & $wheelPython -m agent_docs_doctor.cli audit fixtures/healthy-repo --format text
+          & $sdistPython -m agent_docs_doctor.cli --version
+          & $sdistPython -m agent_docs_doctor.cli doctor
+          & $sdistPython -m agent_docs_doctor.cli audit fixtures/healthy-repo --format text

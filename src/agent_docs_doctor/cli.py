@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import json
+import hashlib
+import os
 import platform
+import stat
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +30,11 @@ from .installer import (
     plan_uninstall,
 )
 from .presentation import audit_text
+from .report_validation import (
+    decode_report,
+    read_report_file,
+    read_report_stdin,
+)
 from .version import __version__
 
 sys.dont_write_bytecode = True
@@ -70,7 +78,11 @@ def parser() -> argparse.ArgumentParser:
     install = sub.add_parser("install-skill", help="preview or install the user-level Agent Skill")
     install.add_argument("--client", choices=tuple(CLIENT_PATHS), required=True)
     install.add_argument("--update", action="store_true", help="preview an update with backup")
-    install.add_argument("--apply", action="store_true", help="apply the displayed operation")
+    install.add_argument(
+        "--apply",
+        metavar="PLAN_TOKEN",
+        help="apply only the operation matching this previewed current-plan fingerprint",
+    )
     install.add_argument("--format", choices=("text", "json"), default="text")
 
     uninstall = sub.add_parser(
@@ -78,7 +90,11 @@ def parser() -> argparse.ArgumentParser:
         help="preview or move a managed skill to a reversible backup",
     )
     uninstall.add_argument("--client", choices=tuple(CLIENT_PATHS), required=True)
-    uninstall.add_argument("--apply", action="store_true", help="apply the displayed operation")
+    uninstall.add_argument(
+        "--apply",
+        metavar="PLAN_TOKEN",
+        help="apply only the operation matching this previewed current-plan fingerprint",
+    )
     uninstall.add_argument("--format", choices=("text", "json"), default="text")
     return result
 
@@ -87,8 +103,14 @@ def _doctor_report() -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     try:
         skill_root = bundled_skill_root()
-    except OSError as exc:
-        checks.append({"name": "bundled-skill", "status": "error", "detail": str(exc)})
+    except OSError:
+        checks.append(
+            {
+                "name": "bundled-skill",
+                "status": "error",
+                "detail": "bundled skill files could not be verified",
+            }
+        )
     else:
         checks.append(
             {
@@ -97,20 +119,68 @@ def _doctor_report() -> dict[str, Any]:
                 "detail": f"SKILL.md available at {skill_root.name}",
             }
         )
-    checks.extend(
-        [
+    checks.append(
+        {
+            "name": "python",
+            "status": "ok" if sys.version_info >= (3, 10) else "error",
+            "detail": platform.python_version(),
+        }
+    )
+    try:
+        with tempfile.TemporaryDirectory(prefix="agent-docs-doctor-probe-") as value:
+            probe = Path(value)
+            authority = probe / "AGENTS.md"
+            authority.write_text("# Disposable read-only audit probe\n", encoding="utf-8")
+            before = _probe_snapshot(probe)
+            report = build_audit(probe)
+            errors = validate_audit(report)
+            after = _probe_snapshot(probe)
+            if errors:
+                raise ValueError(f"generated probe report was invalid: {errors[0]}")
+            if before != after:
+                raise OSError("the disposable audit probe changed its repository")
+    except (OSError, ValueError):
+        checks.append(
             {
-                "name": "python",
-                "status": "ok" if sys.version_info >= (3, 10) else "error",
-                "detail": platform.python_version(),
-            },
+                "name": "audit-mode",
+                "status": "error",
+                "detail": "the disposable audit probe failed",
+            }
+        )
+    else:
+        checks.append(
             {
                 "name": "audit-mode",
                 "status": "ok",
-                "detail": "read-only; writes only occur in explicit skill install operations",
-            },
-        ]
-    )
+                "detail": "disposable audit left its captured filesystem snapshot unchanged",
+            }
+        )
+    try:
+        with tempfile.TemporaryDirectory(prefix="agent-docs-doctor-install-preview-") as value:
+            home = Path(value)
+            before = _probe_snapshot(home)
+            install_plan = plan_install("codex", home=home)
+            after = _probe_snapshot(home)
+            if install_plan.state != "ready" or not install_plan.plan_token:
+                raise ValueError("installer preview did not produce a bound ready plan")
+            if before != after:
+                raise OSError("the disposable installer preview changed its home")
+    except (OSError, ValueError):
+        checks.append(
+            {
+                "name": "installer-preview",
+                "status": "error",
+                "detail": "the disposable installer preview failed",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "name": "installer-preview",
+                "status": "ok",
+                "detail": "disposable preview produced a state-bound plan without applying it",
+            }
+        )
     return {
         "status": "ok" if all(check["status"] == "ok" for check in checks) else "error",
         "version": __version__,
@@ -126,8 +196,40 @@ def _doctor_text(report: dict[str, Any]) -> str:
     for check in report["checks"]:
         marker = "OK" if check["status"] == "ok" else "ERROR"
         lines.append(f"- {marker} {check['name']}: {check['detail']}")
-    lines.append("No repository files were changed.")
+    lines.append("No repository files were changed. The audit-mode check used only a disposable probe.")
     return "\n".join(lines) + "\n"
+
+
+def _probe_snapshot(root: Path) -> tuple[tuple[Any, ...], ...]:
+    entries: list[tuple[Any, ...]] = []
+    paths = [root, *root.rglob("*")]
+    for path in sorted(paths, key=lambda item: item.as_posix()):
+        relative = "." if path == root else path.relative_to(root).as_posix()
+        value = path.lstat()
+        kind = stat.S_IFMT(value.st_mode)
+        digest = ""
+        link_target = ""
+        if stat.S_ISREG(value.st_mode):
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        elif stat.S_ISLNK(value.st_mode):
+            link_target = os.readlink(path)
+        entries.append(
+            (
+                relative,
+                kind,
+                stat.S_IMODE(value.st_mode),
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+                getattr(value, "st_uid", None),
+                getattr(value, "st_gid", None),
+                getattr(value, "st_flags", None),
+                getattr(value, "st_file_attributes", None),
+                digest,
+                link_target,
+            )
+        )
+    return tuple(entries)
 
 
 def _plan_text(plan: dict[str, Any], applied: bool) -> str:
@@ -147,7 +249,10 @@ def _plan_text(plan: dict[str, Any], applied: bool) -> str:
     if not applied:
         lines.append("Nothing was changed.")
         if plan["state"] == "ready":
-            lines.append("Run the same command with --apply to perform exactly this operation.")
+            lines.append(f"Current-plan fingerprint: {plan['plan_token']}")
+            lines.append(
+                f"After reviewing this preview, run the same command with --apply {plan['plan_token']}."
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -179,8 +284,12 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stdout.write(dump_json(report, args.pretty))
             return 0
         if args.command == "validate-report":
-            raw = sys.stdin.read() if args.report == "-" else Path(args.report).read_text(encoding="utf-8")
-            errors = validate_audit(json.JSONDecoder().decode(raw))
+            raw = (
+                read_report_stdin(sys.stdin.buffer)
+                if args.report == "-"
+                else read_report_file(Path(args.report))
+            )
+            errors = validate_audit(decode_report(raw))
             if errors:
                 for error in errors:
                     print(f"error: {error}", file=sys.stderr)
@@ -197,15 +306,23 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "install-skill":
             plan = plan_install(args.client, update=args.update)
             if args.apply and plan.state == "ready":
-                plan = apply_install(plan)
-            _emit_plan(plan, args.format, args.apply and plan.state == "applied")
+                plan = apply_install(plan, args.apply)
+            _emit_plan(
+                plan,
+                args.format,
+                bool(args.apply and plan.state.startswith("applied")),
+            )
             return 0 if plan.state in {"ready", "applied", "already-installed"} else 1
         plan = plan_uninstall(args.client)
         if args.apply and plan.state == "ready":
-            plan = apply_uninstall(plan)
-        _emit_plan(plan, args.format, args.apply and plan.state == "applied")
+            plan = apply_uninstall(plan, args.apply)
+        _emit_plan(
+            plan,
+            args.format,
+            bool(args.apply and plan.state.startswith("applied")),
+        )
         return 0 if plan.state in {"ready", "applied", "not-installed"} else 1
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

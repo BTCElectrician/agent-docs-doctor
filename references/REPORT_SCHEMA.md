@@ -138,11 +138,17 @@ receive distinct skip reasons.
 The inventory is deterministic for a stable filesystem snapshot. Concurrent mutation can produce
 read warnings or a mixed snapshot; rerun against a stable checkout when the evidence is material.
 
-The complete current contract is
-[`schemas/audit-v2.schema.json`](../schemas/audit-v2.schema.json). The validator accepts v1 reports
-for compatibility and validates all emitted v2 nested references, overlaps, skip/warning records,
-coverage, provenance, findings, and locations.
+The current machine contract comprises
+[`schemas/audit-v2.schema.json`](../schemas/audit-v2.schema.json) and the bounded runtime validator.
+The schema encodes the complete emitted v2 shape and every expressible per-container limit. The
+runtime validator additionally enforces aggregate budgets across nested references, platforms,
+overlap occurrences, and finding locations, plus bounded input bytes, JSON depth, object keys,
+diagnostics, and serialized report size. Those cross-container and parser resource constraints are
+not fully expressible in JSON Schema. The validator accepts v1 reports for compatibility and
+validates all emitted v2 nested references, overlaps, skip/warning records, coverage, provenance,
+findings, and locations.
 
 `agent-docs-doctor validate-report` exits `0` for valid output or help, `1` for a well-formed report
-rejected by the schema, and `2` for usage, file I/O, or JSON parsing errors. The JSON is evidence
-input, not a complete semantic audit.
+rejected by the runtime report contract, and `2` for usage, file I/O, or JSON parsing errors. A
+standalone JSON Schema check does not replace the runtime validator. The JSON is evidence input,
+not a complete semantic audit.

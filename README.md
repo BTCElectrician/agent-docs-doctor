@@ -17,15 +17,26 @@ Agent Docs Doctor maps the instruction system around Codex, Claude Code, Cursor,
 agent workflows. It produces deterministic evidence first, then helps a human decide what to keep,
 fix, clarify, combine, or archive later.
 
-The audit runs locally, requires no API key, and does not change the repository.
+The audit runs locally, requires no API key, and does not change the repository. Until an immutable
+release artifact is published, the safe first run is from a checkout whose commit you have
+reviewed:
 
 ```bash
-uvx --from git+https://github.com/BTCElectrician/agent-docs-doctor.git \
-  agent-docs-doctor audit . --format text
+git clone https://github.com/BTCElectrician/agent-docs-doctor.git
+cd agent-docs-doctor
+git rev-parse HEAD
+git status --short
+python3 -B scripts/agent_docs_doctor.py audit fixtures/healthy-repo --format text
 ```
 
-> **Safety promise:** auditing never deletes, rewrites, moves, archives, or “fixes” files.
-> Every audit ends by stating `Nothing was changed.`
+Compare the displayed commit with the commit you intended to review before running the code against
+another repository. There is intentionally no one-line command that downloads a mutable branch and
+executes it immediately.
+
+> **Audit safety boundary:** `audit` and `inventory` never delete, rewrite, move, archive, create,
+> chmod, or “fix” files in the target repository. Text audit output states `Nothing was changed.`
+> The separately invoked skill installer can mutate only its selected user-level skill location
+> after a fingerprint-bound preview and explicit apply.
 
 ## TL;DR
 
@@ -43,7 +54,7 @@ compete—without pretending it can infer organizational intent from a filename.
 | --- | --- |
 | **Evidence before opinion** | Relative paths, hashes, byte counts, loading classifications, references, and exact overlap |
 | **Human-sized decisions** | Stable choices such as **Keep**, **Fix**, **Clarify**, **Combine**, **Archive later**, or **Ask an owner** |
-| **Read-only by default** | The audit does not mutate the repository; even `preview` only proposes a diff |
+| **Read-only audit path** | Audits do not mutate the target repository; previews propose operations without applying them |
 | **Platform-aware discovery** | Recognizes Codex, Claude Code, Cursor, Agent Skills, and common status/handoff surfaces |
 | **Privacy-minimized output** | Avoids paragraph bodies, timestamps, absolute local paths, and secret-like files |
 | **Deterministic CLI** | Zero runtime dependencies, JSON schemas, stable validator exits, and repeatable output |
@@ -163,17 +174,27 @@ map before deciding which instructions should survive.
 
 Python 3.10 or newer is required. The runtime has no third-party dependencies.
 
-### Run without installing
+Agent Docs Doctor 0.3.0 is currently distributed from source. No tagged release or package-index
+artifact is claimed here. Clone the repository, verify the commit you received, and run or install
+that local checkout.
+
+### Run a verified checkout without installing
 
 ```bash
-uvx --from git+https://github.com/BTCElectrician/agent-docs-doctor.git \
-  agent-docs-doctor doctor
+git clone https://github.com/BTCElectrician/agent-docs-doctor.git
+cd agent-docs-doctor
+git rev-parse HEAD
+git status --short
+python3 -B scripts/agent_docs_doctor.py doctor
 ```
 
-### Install the CLI with `uv`
+Before continuing, compare the commit with the revision you intended to trust and inspect any local
+diff reported by `git status`.
+
+### Install the verified checkout with `uv`
 
 ```bash
-uv tool install git+https://github.com/BTCElectrician/agent-docs-doctor.git
+uv tool install .
 agent-docs-doctor doctor
 ```
 
@@ -186,7 +207,8 @@ python3 -m pip install .
 agent-docs-doctor doctor
 ```
 
-If you do not want to install anything, every CLI command can also be run from a clone:
+Installing the CLI mutates the selected Python or `uv` tool environment; it does not install the
+Agent Skill. If you do not want to install anything, every CLI command can run from the checkout:
 
 ```bash
 python3 -B scripts/agent_docs_doctor.py doctor
@@ -204,7 +226,7 @@ agent-docs-doctor install-skill --client codex
 That command is preview-only. Review the destination, then explicitly apply it:
 
 ```bash
-agent-docs-doctor install-skill --client codex --apply
+agent-docs-doctor install-skill --client codex --apply PLAN_TOKEN_FROM_PREVIEW
 ```
 
 Use `claude` or `cursor` instead of `codex` for those clients.
@@ -215,8 +237,30 @@ Use `claude` or `cursor` instead of `codex` for those clients.
 | Claude Code | `~/.claude/skills/agent-docs-doctor` |
 | Cursor | `~/.cursor/skills/agent-docs-doctor` |
 
-Installation writes only to the selected user-level skill folder, never to the repository being
-audited. Updates and uninstalls preserve the managed version in a reversible backup.
+The CLI calls the value a plan token; technically it is a deterministic current-plan fingerprint.
+It binds the proposed action, selected client, resolved destination, packaged skill payload,
+expected destination state, ancestor identities, and backup reservation. Apply rechecks those facts
+and refuses if the source, destination, or previewed state changed. The fingerprint proves state
+equality, not that a person reviewed or approved the preview.
+
+The installer mutates only validated missing ancestors under the selected user home, the selected
+user-level skill destination, a same-parent private staging entry, and the
+`~/.agent-docs-doctor/backups` reservation shown by the plan—never the repository being audited.
+Existing unmanaged destinations, path aliases, and link or reparse-point ancestors are rejected.
+Updates and uninstalls move the entire validated managed destination, including unrecognized extra
+files, intact into a collision-resistant backup container before replacement. Backups are not
+deleted automatically. The fingerprint hashes tool-managed bytes; user-owned extra file bytes are
+never opened and are bound by path, identity, type, size, mode, link count, and change/modify
+metadata on supported apply platforms. Failure and interruption recovery removes only private
+directories whose captured identity is still visible and empty. If that cannot be proved, apply
+fails and reports that private residue may remain rather than deleting an unknown replacement. A
+catchable interruption after creation but before identity capture is reported as unconfirmed
+private residue; the installer does not infer ownership from the visible pathname.
+
+Preview is portable and no-write. Apply is supported only on Darwin and Linux runtimes with the
+required descriptor-relative filesystem operations; it fails closed on Windows and other
+unsupported runtimes. Audit, inventory, doctor, validation, and installer preview remain
+cross-platform.
 
 Now ask your agent:
 
@@ -291,6 +335,11 @@ agent-docs-doctor validate-report agent-docs-audit.json
 agent-docs-doctor audit . --format json | agent-docs-doctor validate-report -
 ```
 
+The validator accepts only bounded input. A path must identify a regular file, and both file and
+standard-input reads stop at 16,000,000 bytes. JSON deeper than 128 object or array levels is
+rejected as a parsing failure instead of producing a traceback. Validation checks the report
+contract; it does not expand the audit's coverage or prove the audited repository is healthy.
+
 Stable exits:
 
 - `0`: valid report or help;
@@ -303,12 +352,15 @@ Preview, install, or update the managed skill:
 
 ```bash
 agent-docs-doctor install-skill --client codex
-agent-docs-doctor install-skill --client codex --apply
+agent-docs-doctor install-skill --client codex --apply PLAN_TOKEN_FROM_PREVIEW
 agent-docs-doctor install-skill --client codex --update
-agent-docs-doctor install-skill --client codex --update --apply
+agent-docs-doctor install-skill --client codex --update --apply PLAN_TOKEN_FROM_PREVIEW
 ```
 
-Clients: `codex`, `claude`, and `cursor`.
+Clients: `codex`, `claude`, and `cursor`. `--apply` requires the exact deterministic current-plan
+fingerprint emitted by preview. The fingerprint is a stale-state interlock, not proof of prior
+review, authentication, or approval: inspect the displayed action, target, managed files, backup,
+and destination state first. Apply fails closed outside supported Darwin/Linux runtimes.
 
 ### `uninstall-skill`
 
@@ -316,8 +368,30 @@ Preview or move the managed skill to a reversible backup:
 
 ```bash
 agent-docs-doctor uninstall-skill --client codex
-agent-docs-doctor uninstall-skill --client codex --apply
+agent-docs-doctor uninstall-skill --client codex --apply PLAN_TOKEN_FROM_PREVIEW
 ```
+
+Uninstall moves only a currently managed skill to the previewed backup. It does not delete that
+backup or act on an unmanaged destination.
+
+### Recover a managed backup
+
+There is no automatic restore or backup cleanup command. Recovery is deliberately manual:
+
+1. Stop or refresh the client so it is not reading the skill during recovery.
+2. Use the `Reversible backup` path from the successful applied plan, confirm the payload now
+   exists there, and verify its managed manifest, client, version, and file hashes.
+3. Preview the current destination. If it exists, is unmanaged, is a link or reparse point, or
+   differs from the state you expected, stop rather than replacing it.
+4. Only when the destination is absent, use a same-filesystem move that fails rather than replacing
+   a destination that appears concurrently. Move the verified backup payload to the exact
+   user-level destination; do not use an overwrite-capable copy or move.
+5. Run `install-skill --client CLIENT` again. An `already-installed` result confirms the restored
+   manifest; any other result needs review.
+
+Keep backups until recovery is no longer needed. Agent Docs Doctor never prunes them. The backup
+container is tool-reserved, but preserved extra files remain user-owned and are not silently read,
+discarded, or adopted into the managed allowlist.
 
 ### Global options
 
@@ -338,8 +412,9 @@ New reports use:
 - `agent-docs-doctor.inventory.v2`; and
 - [`schemas/audit-v2.schema.json`](schemas/audit-v2.schema.json).
 
-The validator continues to accept legacy v1 reports. Additive v2 fields may appear in future 0.2.x
-releases; incompatible changes require a new schema version.
+The validator continues to accept legacy v1 reports. Additive v2 fields may appear in compatible
+releases; incompatible report changes require a new schema version. The 0.3.0 CLI change requiring
+a current-plan fingerprint for installer apply does not change the v2 report schema.
 
 ## Safety and privacy
 
@@ -347,21 +422,63 @@ The audit:
 
 - walks only the requested root;
 - never writes into that root;
-- never opens secret-like filenames;
+- never opens paths with a secret-like component or multiply-linked candidate files;
 - ignores default VCS, dependency, build, fixture, cache, and test-data directories;
 - honors a conservative subset of root and nested ignore rules;
 - does not descend into an ignored directory or read control files inside it;
 - follows only auditable, in-root, regular-file symlinks;
 - records out-of-root, missing, excluded, invalid, and resource-limited imports without opening
   them;
-- caps individual files, aggregate bytes, candidate count, import depth, and ignore-rule count;
+- caps traversal entries, individual and aggregate bytes, candidate count, ignore rules, import
+  depth, automatic-import expansion edges, reference records, paragraph blocks, finding records
+  and locations, and skipped records;
 - reports `complete` or `partial` coverage explicitly;
 - emits relative paths rather than private absolute paths;
+- reduces frontmatter to a fixed privacy-safe summary and masks absolute or out-of-root reference
+  targets;
 - emits no timestamps; and
 - validates every generated report before output.
 
+On POSIX, candidate reads and directory enumeration additionally require the opened descriptor to
+resolve to the exact intended path under the requested root. If descriptor-path verification is
+unavailable, or an ancestor was aliased or replaced, collection fails closed before consuming
+candidate bytes or directory entries and coverage becomes partial. Non-printing Unicode paths are
+shown only as one-way hash markers so directionality and zero-width controls cannot spoof a
+terminal display.
+
 Ignore files reduce exposure; they are not security sandboxes. Filesystem permissions remain the
-correct enforcement boundary for secrets.
+correct enforcement boundary for secrets. Hard links cannot be safely classified from a filename
+alone, so the auditor conservatively excludes every candidate whose filesystem link count is
+greater than one, as well as any candidate whose identity matches a protected secret-like path
+discovered in the requested root.
+
+`complete` means that every candidate inside the documented discovery scope was collected without
+a read, traversal, ignore-control, or resource-limit gap. It does not mean every file in the
+repository was read: default exclusions and unrecognized filenames remain outside the declared
+scope. A custom-ignored candidate or directory, unreadable traversal point, concurrent
+disappearance, non-regular candidate, or exhausted cap makes coverage `partial` and appears in
+bounded skip or warning evidence. When coverage is partial, absence of a finding is not evidence
+that the omitted area is safe.
+
+The engine publishes the active numeric limits in `engine.configuration` and `coverage.limits` so
+consumers do not need to assume values from prose. Reaching an output-list cap stops that evidence
+class deterministically, marks coverage partial, and emits a bounded warning rather than allowing
+report growth to become unbounded.
+
+The 0.3.0 defaults are:
+
+| Bound | Limit |
+| --- | ---: |
+| Walk entries / candidate files | 100,000 / 10,000 |
+| Bytes per file / aggregate read bytes | 2,000,000 / 50,000,000 |
+| Ignore rules / import depth | 10,000 / 10 |
+| References aggregate / per file | 2,000 / 500 |
+| Paragraph blocks | 5,000 |
+| Findings / locations per finding | 2,000 / 500 |
+| Skipped records / warning records | 5,000 / 5,000 |
+| Display characters per untrusted value | 512 |
+| Serialized report or validator input | 16,000,000 bytes |
+| Validator JSON nesting | 128 levels |
 
 ## Design philosophy
 
@@ -378,9 +495,9 @@ correct enforcement boundary for secrets.
 
 ## Troubleshooting
 
-### `uvx: command not found`
+### I do not have `uv`
 
-Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) or use the source path:
+Use Python directly from the verified source checkout:
 
 ```bash
 git clone https://github.com/BTCElectrician/agent-docs-doctor.git
@@ -400,8 +517,11 @@ Then run the command with a Python 3.10–3.13 interpreter.
 
 ### The audit reports `partial` coverage
 
-Read the emitted coverage warnings. A file may have been ignored, excluded, unreadable, unsafe,
-invalid, or beyond a resource limit. Treat missing evidence as unknown rather than clean.
+Read the bounded skip records and coverage warnings. A custom ignore, unreadable directory,
+non-regular file, concurrent filesystem change, protected alias, or resource cap may have prevented
+collection. Default exclusions still define the outer scan scope. Treat missing evidence as
+unknown rather than clean, stabilize the checkout or narrow the cause, and rerun before relying on
+the absence of findings.
 
 ### A known document was not inventoried
 
@@ -420,6 +540,15 @@ agent-docs-doctor install-skill --client codex
 
 The second command previews the resolved destination without changing it. Restart or refresh the
 client’s skill catalog after installation.
+
+### Apply says the current-plan fingerprint is stale or invalid
+
+Do not retry with a different destination or bypass the check. The packaged payload, destination,
+managed manifest, backup reservation, or filesystem state changed after preview. Generate a fresh
+preview, compare it with the earlier one, and apply only the new fingerprint after review.
+
+The fingerprint is deterministic. It establishes that the recomputed plan
+still matches; it cannot establish that a human actually reviewed or approved an earlier preview.
 
 ### A finding looks wrong
 
@@ -441,6 +570,12 @@ itself is incorrect.
   dependencies; malformed or complex constructs may remain judgment evidence.
 - **Platform behavior changes:** official loading and precedence rules are dated and must be
   reverified as clients evolve.
+- **Installer apply platform boundary:** preview is portable, but secure apply is limited to Darwin
+  and Linux descriptor-relative runtimes and fails closed elsewhere.
+- **Same-user race boundary:** descriptor anchoring prevents link traversal and path redirection,
+  but POSIX has no mandatory rename lock against a hostile process running as the same user in the
+  final visibility-check-to-rename interval. Do not run apply while another process can rewrite the
+  selected skill or backup directories.
 
 ## FAQ
 
@@ -452,9 +587,12 @@ of reading the text or JSON report can use its evidence.
 
 ### Does the audit modify or delete anything?
 
-No. `inventory`, `audit`, `doctor`, and `validate-report` do not modify the target repository.
-Skill installation changes only the explicitly selected user-level skill directory and is
-preview-first.
+No target-repository mutation is performed by `inventory` or `audit`. `doctor` creates and audits a
+disposable temporary probe; it does not audit or write the user's repository. `validate-report`
+only reads bounded report input. The installer is a separate mutation path: a fingerprint-bound
+`install-skill` or `uninstall-skill --apply PLAN_TOKEN_FROM_PREVIEW` can change only the validated
+user-level skill destination and tool-reserved backup container shown in its preview. Preserved
+extra contents may remain user-owned and are never automatically deleted.
 
 ### Does it upload my repository?
 
@@ -492,16 +630,41 @@ diff and rollback notes. Only a later explicit instruction authorizes applicatio
 ## Development
 
 ```bash
-python3 -B -m unittest discover -s tests -v
-python3 -B scripts/check_python_syntax.py src scripts tests
-ruff check src scripts tests
-ruff format --check src scripts tests
-pyright
-uv build
+uv sync --frozen --extra dev
+uv run --frozen --no-sync python -B -m pytest -q
+uv run --frozen --no-sync python -B scripts/check_python_syntax.py src scripts tests
+uv run --frozen --no-sync python -B scripts/check_schema_contract.py
+uv run --frozen --no-sync python -B scripts/check_no_write.py fixtures/healthy-repo
+uv run --frozen --no-sync python -B scripts/public_safety_scan.py .
+uv run --frozen --no-sync ruff check src scripts tests
+uv run --frozen --no-sync ruff format --check src scripts tests
+uv run --frozen --no-sync pyright
+uv run --frozen --no-sync python -m build --no-isolation
 ```
 
-Run the current official Agent Skill validator against the repository root before release. See
+CI runs those gates on Linux, macOS, and Windows with Python 3.10 and 3.13. Each job also builds the
+wheel and source distribution with the exact locked backend, compares every bundled skill and
+schema byte across the two archives, installs each archive without runtime dependencies into a
+separate fresh environment, and smokes both installed console commands. Run the current official
+Agent Skill validator against the repository root before release. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for discovery, fixture, schema, and safety rules.
+
+`scripts/check_no_write.py` compares root and entry identity, type, content hash, size, link count,
+mode, ownership, modification/change times, symlink or reparse target, platform flags, and
+extended-attribute hashes where supported. It refuses snapshots above 100,000 entries or
+512,000,000 readable bytes. It never hashes secret-like or multiply-linked files; those entries
+receive metadata-only comparison and the result says their contents were not read. This is a
+before/after invariant check, not a system-call trace; a transient write that perfectly restored
+every recorded attribute would require separate OS-level tracing to detect. Run this proof only on
+a synthetic or otherwise approved fixture. Descriptor extended-attribute reads use size queries
+before allocation and fail closed above 128 attributes per entry, 1,024 bytes per name, 1,000,000
+bytes per value, 4,000,000 value bytes per entry, or 64,000,000 aggregate attribute bytes.
+
+`scripts/public_safety_scan.py` scans every Git-tracked public path plus text-like, unignored
+pending files. It does not follow links or read ignored local-only files, hardlinks, or non-regular
+paths. Path discovery, file and aggregate bytes, runtime, pattern output, and finding output are
+bounded; any file it cannot inspect safely fails the release gate instead of being silently
+omitted.
 
 ## About contributions
 

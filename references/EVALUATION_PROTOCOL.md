@@ -15,6 +15,11 @@ Use this protocol before claiming an instruction redesign improves behavior.
 
 Record immutable identifiers for the incumbent and challenger, repository snapshot, model/client version, reasoning setting, tools, permissions, environment, and prompts. Do not edit either condition mid-run. If a defect requires a revision, create a new challenger identifier and restart comparable cases.
 
+Record the Agent Docs Doctor version and commit, report schema, engine configuration, coverage
+status, warnings, and exhausted limits. A schema-valid but partial report is not interchangeable
+with a complete report. If either condition was collected from a changing checkout or with a
+different cap, stabilize and rerun before comparison.
+
 ## 2. Build the task set
 
 Use representative tasks from the repository's actual work distribution. Include:
@@ -45,6 +50,7 @@ Prefer task-specific pass/fail rubrics and observable counts:
 | Communication | commentary and final output meet task needs without omission |
 | Efficiency | time to first useful action, wall time, tokens, and cost when observable |
 | Cross-platform behavior | same invariant survives each supported consumer |
+| Evidence completeness | same declared discovery scope completed without ignored, unreadable, or capped evidence |
 
 Resource savings count only when correctness and safety still pass.
 
@@ -57,10 +63,19 @@ Resource savings count only when correctness and safety still pass.
 - Keep run outputs outside later agents' discovery paths.
 - Never reuse a session after it has seen both incumbent and challenger.
 - Record failures before hardening; do not delete inconvenient runs.
+- Keep audit output and run artifacts outside both evaluated repositories unless the frozen
+  experiment explicitly includes those files.
+- Do not use `install-skill --apply PLAN_TOKEN_FROM_PREVIEW` as part of an audit run. User-level
+  installation is a separate fingerprint-bound mutation whose state must be frozen independently if the
+  skill is part of a condition.
 
 ## 5. Judge and compare
 
 Use deterministic graders where the task has objective outputs. Calibrate model or rubric judges against human review. Report per-task outcomes, not only averages. Include regressions, uncertainty, missing telemetry, and sample size.
+
+Before scoring “no issue found,” check the report's partial-coverage reasons. Omitted or truncated
+evidence is `unknown`, not a pass. Report the affected task and evidence class rather than imputing
+the missing observation.
 
 Do not borrow acceptance percentages from another repository. Define thresholds before runs based on local risk. Safety-critical cases should generally require zero regressions.
 

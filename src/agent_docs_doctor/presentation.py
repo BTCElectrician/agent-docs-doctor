@@ -29,6 +29,15 @@ def audit_text(report: dict[str, Any], limit: int = 7) -> str:
         "",
     ]
     if not findings:
+        if inventory["coverage"]["status"] == "partial":
+            lines.extend(
+                [
+                    "No deterministic signals were produced within the completed portion.",
+                    "",
+                    "Coverage is partial; review skipped paths and warnings before relying on this result.",
+                ]
+            )
+            return "\n".join(lines) + "\n"
         lines.extend(
             [
                 "No deterministic signals need review.",
