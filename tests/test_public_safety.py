@@ -30,8 +30,9 @@ class PublicSafetyScanTests(unittest.TestCase):
             ignored = root / "ignored"
             ignored.mkdir()
             private = ignored / "private.md"
-            if hasattr(os, "mkfifo"):
-                os.mkfifo(private)
+            mkfifo = getattr(os, "mkfifo", None)
+            if mkfifo is not None:
+                mkfifo(private)
             else:
                 private.write_text("ignored-private-sentinel\n", encoding="utf-8")
 

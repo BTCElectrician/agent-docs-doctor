@@ -217,11 +217,13 @@ def test_root_control_ignored_by_primary_rules_is_not_read() -> None:
     )
 
 
-@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs unavailable")
 def test_bounded_input_rejects_fifo_without_blocking() -> None:
+    mkfifo = getattr(os, "mkfifo", None)
+    if mkfifo is None:
+        pytest.skip("FIFOs unavailable")
     with tempfile.TemporaryDirectory() as value:
         fifo = Path(value) / "report.json"
-        os.mkfifo(fifo)
+        mkfifo(fifo)
         with pytest.raises(ValueError, match="regular file"):
             core.read_bounded_input(fifo, 1024)
 
