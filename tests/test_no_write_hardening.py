@@ -47,14 +47,19 @@ def test_snapshot_parent_swap_fails_before_out_of_root_content_read() -> None:
         real_walk = check_no_write._walk_without_links
         real_hash = check_no_write._hash_regular
         hashed: list[Path] = []
+        walk_completed = False
+        swap_completed = False
 
         def swap_after_walk(captured_root: Path):
+            nonlocal walk_completed, swap_completed
             paths = real_walk(captured_root)
+            walk_completed = True
             nested.rename(root / "docs-original")
             try:
                 nested.symlink_to(outside, target_is_directory=True)
             except OSError as exc:
                 pytest.skip(f"symlinks unavailable: {exc.__class__.__name__}")
+            swap_completed = True
             return paths
 
         def record_hash(
@@ -80,6 +85,8 @@ def test_snapshot_parent_swap_fails_before_out_of_root_content_read() -> None:
         ):
             check_no_write.snapshot(root)
 
+    assert walk_completed
+    assert swap_completed
     assert root / "docs" / "AGENTS.md" not in hashed
 
 

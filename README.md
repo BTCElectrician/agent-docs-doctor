@@ -194,7 +194,7 @@ diff reported by `git status`.
 ### Install the verified checkout with `uv`
 
 ```bash
-uv tool install .
+uv tool install --link-mode copy .
 agent-docs-doctor doctor
 ```
 
@@ -256,6 +256,16 @@ directories whose captured identity is still visible and empty. If that cannot b
 fails and reports that private residue may remain rather than deleting an unknown replacement. A
 catchable interruption after creation but before identity capture is reported as unconfirmed
 private residue; the installer does not infer ownership from the visible pathname.
+
+Installed bundled resources are accepted only when one bounded, immutable wheel `RECORD` snapshot
+binds the executing module and the exact static resource allowlist to their expected byte counts
+and SHA-256 values. Every bound file must be singly linked and is rejected before content read when
+it is hard-linked. Windows preview holds non-delete-sharing native directory handles and
+non-write-sharing file handles after capturing each identity. The documented `uv` command uses
+`--link-mode copy` so its installed files meet that boundary; source-checkout and other
+bundled-resource hard links are also rejected. Wheel `RECORD` is an integrity manifest, not an
+authenticity signature: a singly linked expected package path already altered before its identity
+is captured must be read within the byte limit to compare its digest, then fails closed.
 
 Preview is portable and no-write. Apply is supported only on Darwin and Linux runtimes with the
 required descriptor-relative filesystem operations; it fails closed on Windows and other
@@ -540,6 +550,18 @@ agent-docs-doctor install-skill --client codex
 
 The second command previews the resolved destination without changing it. Restart or refresh the
 client’s skill catalog after installation.
+
+### `doctor` reports an installer-preview error after `uv tool install`
+
+Reinstall the verified checkout with copied package resources:
+
+```bash
+uv tool install --force --link-mode copy .
+agent-docs-doctor doctor
+```
+
+Agent Docs Doctor rejects multiply linked bundled skill files before reading their contents.
+Copy mode avoids cache hardlinks while leaving the separately applied user-level skill untouched.
 
 ### Apply says the current-plan fingerprint is stale or invalid
 

@@ -67,8 +67,23 @@
 - Managed destination files with multiple hard links are rejected without reading their bytes.
 - Bundled installer resources must belong to the currently executing source checkout or installed
   distribution; unrelated installed data cannot override the code being run.
+- Installed bundled resources are accepted only when one bounded, immutable wheel `RECORD`
+  snapshot binds the executing module, exact static allowlist, byte counts, and SHA-256 values.
+  Bundled-resource hard links are rejected before content read in every source mode; documented
+  `uv` installation and distribution-smoke commands use copy mode.
+- Windows packaged-resource preview holds native non-delete-sharing directory handles,
+  non-write-sharing file handles, and pre-read file identities, so changes after identity capture
+  cannot redirect payload reads. POSIX snapshots likewise retain allowlisted subdirectory
+  descriptors and pre-read file identities through verification. Documentation now distinguishes
+  wheel `RECORD` integrity from package authenticity and discloses bounded read-then-reject
+  behavior for a singly linked path already altered before capture.
 - File reads use one bounded, nonblocking descriptor with regular-file and identity checks, so a
   candidate replaced by a FIFO or other non-regular object cannot block the audit.
+- Windows reads now use binary descriptors so raw-byte hashes preserve CRLF exactly. Cross-provider
+  Windows pathname-to-descriptor checks use stable identity and metadata fields while retaining
+  full descriptor-to-descriptor change-time checks around reads. Native audit-directory pinning
+  now declares the exact Win32 `HANDLE` API types, denies delete sharing during enumeration, and
+  has a hosted Windows rename/close probe.
 - POSIX reads and directory enumeration require descriptor-path resolution, exact intended-path
   equality, and requested-root containment before consuming bytes or entries.
 - Secret-like path components and multiply-linked candidates are excluded from reads.

@@ -335,8 +335,9 @@ def test_walk_fails_closed_when_pinned_directory_location_is_unavailable() -> No
     with tempfile.TemporaryDirectory() as value:
         root = Path(value).resolve()
         write(root, "AGENTS.md", "# safe\n")
+        location_probe = "_windows_handle_resolved_path" if os.name == "nt" else "_descriptor_resolved_path"
         with (
-            patch.object(core, "_descriptor_resolved_path", return_value=None),
+            patch.object(core, location_probe, return_value=None),
             patch.object(
                 core.os,
                 "scandir",
@@ -349,6 +350,22 @@ def test_walk_fails_closed_when_pinned_directory_location_is_unavailable() -> No
     assert inventory["files"] == []
     assert inventory["coverage"]["status"] == "partial"
     assert "filesystem traversal error" in inventory["coverage"]["partial_reasons"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows native directory pinning test")
+def test_windows_native_directory_pin_denies_rename_until_typed_close() -> None:
+    with tempfile.TemporaryDirectory() as value:
+        root = Path(value).resolve()
+        renamed = root.with_name(f"{root.name}-renamed")
+        scan_target, close_pinned = core._open_pinned_directory(root, root)
+        try:
+            assert scan_target == root
+            with pytest.raises(OSError):
+                root.rename(renamed)
+        finally:
+            close_pinned()
+        root.rename(renamed)
+        renamed.rename(root)
 
 
 def test_nonprinting_unicode_path_is_hash_only_in_json_and_text() -> None:

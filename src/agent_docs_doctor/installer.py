@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import csv
 import ctypes
 import errno
 import hashlib
+import io
 import json
 import os
 import re
@@ -37,6 +40,11 @@ MAX_TARGET_ENTRIES = 10_000
 MAX_TARGET_DEPTH = 128
 MAX_STATE_PATH_CHARS = 512
 MAX_BACKUP_COLLISIONS = 1_000
+MAX_DISTRIBUTION_RECORD_BYTES = 4_000_000
+MAX_DISTRIBUTION_RECORDS = 10_000
+MAX_DISTRIBUTION_RECORD_PATH_CHARS = 1_024
+MAX_DISTRIBUTION_RECORD_FIELD_CHARS = 4_096
+MAX_DISTRIBUTION_RECORD_LINE_CHARS = 4_096
 BACKUP_PAYLOAD_NAME = "payload"
 SOURCE_RELATIVE_PATHS = (
     "SKILL.md",
@@ -67,6 +75,13 @@ class InstallPlan:
     expected_path_sha256: str | None = None
     backup_reservation: Path | None = None
     plan_token: str | None = None
+
+
+@dataclass(frozen=True)
+class _BundledSource:
+    root: Path
+    records: tuple[tuple[str, str, int], ...] = ()
+    root_identity: tuple[int, int] | None = None
 
 
 def _secure_mutation_supported() -> bool:
@@ -481,48 +496,241 @@ def _descriptor_resolved_path(descriptor: int) -> Path | None:
             import msvcrt
 
             handle = msvcrt.get_osfhandle(descriptor)
-            buffer = ctypes.create_unicode_buffer(32_768)
-            length = ctypes.windll.kernel32.GetFinalPathNameByHandleW(
-                handle,
-                buffer,
-                len(buffer),
-                0,
-            )
-            if length <= 0 or length >= len(buffer):
-                return None
-            value = buffer.value
-            if value.startswith("\\\\?\\UNC\\"):
-                value = "\\\\" + value[8:]
-            elif value.startswith("\\\\?\\"):
-                value = value[4:]
-            return Path(value)
+            return _windows_handle_resolved_path(handle)
         except (AttributeError, OSError, ValueError):
             return None
     return None
 
 
-def _read_regular_bytes(path: Path, *, limit: int) -> bytes:
+def _windows_handle_resolved_path(handle: int) -> Path | None:
+    if os.name != "nt":
+        return None
+    try:  # pragma: no cover - exercised by hosted Windows
+        _create_file, get_final_path, _close_handle = _windows_handle_functions()
+        buffer = ctypes.create_unicode_buffer(32_768)
+        length = get_final_path(
+            handle,
+            buffer,
+            len(buffer),
+            0,
+        )
+        if length <= 0 or length >= len(buffer):
+            return None
+        value = buffer.value
+        if value.startswith("\\\\?\\UNC\\"):
+            value = "\\\\" + value[8:]
+        elif value.startswith("\\\\?\\"):
+            value = value[4:]
+        return Path(value)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _windows_handle_functions() -> tuple[Any, Any, Any]:
+    if os.name != "nt":
+        raise OSError("Windows handle APIs are unavailable")
+    try:  # pragma: no cover - exercised by hosted Windows
+        from ctypes import wintypes
+
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            raise OSError("Windows handle APIs are unavailable")
+        kernel32 = windll.kernel32
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        get_final_path = kernel32.GetFinalPathNameByHandleW
+        get_final_path.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        get_final_path.restype = wintypes.DWORD
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+        return create_file, get_final_path, close_handle
+    except (AttributeError, OSError, ValueError) as exc:
+        raise OSError("Windows handle APIs are unavailable") from exc
+
+
+def _open_windows_directory_handle(
+    path: Path,
+    expected_identity: tuple[int, int],
+) -> int:
+    """Hold a non-delete-sharing Windows handle to one exact non-reparse directory."""
+
+    if os.name != "nt":
+        raise OSError("Windows directory pinning is unavailable")
+    if expected_identity[1] <= 0:
+        raise OSError("directory has no stable identity for Windows pinning")
+    try:  # pragma: no cover - exercised by hosted Windows
+        create_file, _get_final_path, close_handle = _windows_handle_functions()
+        handle = create_file(
+            os.fspath(path),
+            0x80,  # FILE_READ_ATTRIBUTES
+            0x1 | 0x2,  # FILE_SHARE_READ | FILE_SHARE_WRITE; deliberately no DELETE
+            None,
+            3,  # OPEN_EXISTING
+            0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+            None,
+        )
+        invalid_handle = ctypes.c_void_p(-1).value
+        handle_value = getattr(handle, "value", handle)
+        if handle_value in (None, invalid_handle):
+            raise OSError("directory could not be pinned")
+        try:
+            resolved_handle_path = _windows_handle_resolved_path(int(handle_value))
+            if resolved_handle_path is None:
+                raise OSError("pinned directory path could not be verified")
+            actual = Path(os.path.abspath(os.fspath(resolved_handle_path)))
+            expected = Path(os.path.abspath(os.fspath(path)))
+            if os.path.normcase(os.fspath(actual)) != os.path.normcase(os.fspath(expected)):
+                raise OSError("directory path changed while it was being pinned")
+            visible = path.lstat()
+            if (
+                _is_link_like(path, visible)
+                or not stat.S_ISDIR(visible.st_mode)
+                or (visible.st_dev, visible.st_ino) != expected_identity
+            ):
+                raise OSError("directory identity changed while it was being pinned")
+            return int(handle_value)
+        except BaseException as exc:
+            if not close_handle(handle_value):
+                raise OSError("failed to close an unverified directory pin") from exc
+            raise
+    except (AttributeError, OSError, ValueError) as exc:
+        raise OSError("directory could not be pinned safely") from exc
+
+
+def _close_windows_handle(handle: int) -> None:
+    try:  # pragma: no cover - exercised by hosted Windows
+        _create_file, _get_final_path, close_handle = _windows_handle_functions()
+        if not close_handle(handle):
+            raise OSError("pinned directory handle could not be closed")
+    except AttributeError as exc:
+        raise OSError("pinned directory handle could not be closed") from exc
+
+
+def _open_windows_file_descriptor(
+    path: Path,
+    expected_snapshot: os.stat_result,
+) -> int:
+    """Open one exact Windows file while denying concurrent write/delete access."""
+
+    if os.name != "nt":
+        raise OSError("Windows file pinning is unavailable")
+    if expected_snapshot.st_ino <= 0:
+        raise OSError("file has no stable identity for Windows pinning")
+    handle: int | None = None
+    try:  # pragma: no cover - exercised by hosted Windows
+        import msvcrt
+
+        create_file, _get_final_path, close_handle = _windows_handle_functions()
+        raw_handle = create_file(
+            os.fspath(path),
+            0x80000000,  # GENERIC_READ
+            0x1,  # FILE_SHARE_READ; deliberately no WRITE or DELETE
+            None,
+            3,  # OPEN_EXISTING
+            0x00200000,  # FILE_FLAG_OPEN_REPARSE_POINT
+            None,
+        )
+        invalid_handle = ctypes.c_void_p(-1).value
+        handle_value = getattr(raw_handle, "value", raw_handle)
+        if handle_value in (None, invalid_handle):
+            raise OSError("file could not be pinned")
+        handle = int(handle_value)
+        resolved_handle_path = _windows_handle_resolved_path(handle)
+        if resolved_handle_path is None:
+            raise OSError("pinned file path could not be verified")
+        actual = Path(os.path.abspath(os.fspath(resolved_handle_path)))
+        expected = Path(os.path.abspath(os.fspath(path)))
+        if os.path.normcase(os.fspath(actual)) != os.path.normcase(os.fspath(expected)):
+            raise OSError("file path changed while it was being pinned")
+        visible = path.lstat()
+        if (
+            _is_link_like(path, visible)
+            or not stat.S_ISREG(visible.st_mode)
+            or not _same_installer_path_snapshot(expected_snapshot, visible)
+        ):
+            raise OSError("file identity changed while it was being pinned")
+        descriptor = msvcrt.open_osfhandle(
+            handle,
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0),
+        )
+        handle = None  # ownership transferred to the CRT descriptor
+        return descriptor
+    except (AttributeError, OSError, ValueError) as exc:
+        if handle is not None:
+            try:
+                _create_file, _get_final_path, close_handle = _windows_handle_functions()
+                if not close_handle(handle):
+                    raise OSError("failed to close an unverified file pin") from exc
+            except OSError as cleanup_exc:
+                raise OSError("failed to close an unverified file pin") from cleanup_exc
+        raise OSError("file could not be pinned safely") from exc
+
+
+def _same_installer_path_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
+    return (
+        stat.S_IFMT(left.st_mode) == stat.S_IFMT(right.st_mode)
+        and left.st_dev == right.st_dev
+        and left.st_ino == right.st_ino
+        and left.st_size == right.st_size
+        and getattr(left, "st_mtime_ns", None) == getattr(right, "st_mtime_ns", None)
+        and getattr(left, "st_ctime_ns", None) == getattr(right, "st_ctime_ns", None)
+        and left.st_nlink == right.st_nlink
+    )
+
+
+def _read_regular_bytes(
+    path: Path,
+    *,
+    limit: int,
+    reject_hardlinks: bool = True,
+    expected_size: int | None = None,
+    expected_snapshot: os.stat_result | None = None,
+) -> bytes:
     try:
         before = path.lstat()
     except OSError as exc:
         raise OSError("installer file is unavailable") from exc
+    if expected_snapshot is not None and not _same_installer_path_snapshot(
+        expected_snapshot,
+        before,
+    ):
+        raise OSError("installer file changed before it could be read")
     if _is_link_like(path, before) or not stat.S_ISREG(before.st_mode):
         raise OSError("refusing a non-regular installer file")
-    if before.st_nlink > 1:
+    if reject_hardlinks and before.st_nlink > 1:
         raise OSError("refusing a hard-linked installer file")
     if before.st_size > limit:
         raise OSError("installer file exceeds its safety limit")
+    if expected_size is not None and before.st_size != expected_size:
+        raise OSError("installer file size does not match its trusted record")
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
+        descriptor = _open_windows_file_descriptor(path, before) if os.name == "nt" else os.open(path, flags)
     except OSError as exc:
         raise OSError("installer file could not be safely opened") from exc
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode) or opened.st_size > limit:
             raise OSError("refusing a changed or oversized installer file")
+        if expected_size is not None and opened.st_size != expected_size:
+            raise OSError("installer file size does not match its trusted record")
         descriptor_path = _descriptor_resolved_path(descriptor)
         if descriptor_path is None:
             raise OSError("installer file location could not be safely verified")
@@ -530,14 +738,17 @@ def _read_regular_bytes(path: Path, *, limit: int) -> bytes:
         actual_path = Path(os.path.abspath(os.fspath(descriptor_path)))
         if os.path.normcase(os.fspath(actual_path)) != os.path.normcase(os.fspath(expected_path)):
             raise OSError("installer file path changed while it was being opened")
-        if opened.st_nlink > 1:
+        if reject_hardlinks and opened.st_nlink > 1:
             raise OSError("refusing a hard-linked installer file")
         if (
             before.st_dev != opened.st_dev
             or before.st_ino != opened.st_ino
             or before.st_size != opened.st_size
             or getattr(before, "st_mtime_ns", None) != getattr(opened, "st_mtime_ns", None)
-            or getattr(before, "st_ctime_ns", None) != getattr(opened, "st_ctime_ns", None)
+            or (
+                os.name != "nt"
+                and getattr(before, "st_ctime_ns", None) != getattr(opened, "st_ctime_ns", None)
+            )
         ):
             raise OSError("installer file changed while it was being opened")
         chunks: list[bytes] = []
@@ -577,7 +788,93 @@ def _json_sha256(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def bundled_skill_root() -> Path:
+def _record_sha256(value: bytes) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(value).digest()).rstrip(b"=").decode("ascii")
+
+
+def _record_location(distribution_root: Path, record_path: str) -> Path:
+    pure_path = PurePosixPath(record_path)
+    if not pure_path.parts or pure_path.is_absolute() or "\\" in record_path:
+        raise OSError("installed distribution has an invalid RECORD path")
+    try:
+        return (distribution_root / Path(*pure_path.parts)).resolve(strict=True)
+    except OSError as exc:
+        raise OSError("installed distribution RECORD path could not be resolved") from exc
+
+
+def _parse_distribution_record(raw: bytes) -> tuple[tuple[str, str, str], ...]:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OSError("installed distribution RECORD is not valid UTF-8") from exc
+    if "\0" in text:
+        raise OSError("installed distribution RECORD contains an invalid value")
+    if any(len(line) > MAX_DISTRIBUTION_RECORD_LINE_CHARS for line in text.splitlines()):
+        raise OSError("installed distribution RECORD line exceeds its safety limit")
+    rows: list[tuple[str, str, str]] = []
+    seen_paths: set[str] = set()
+    try:
+        reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+        for row in reader:
+            if len(rows) >= MAX_DISTRIBUTION_RECORDS:
+                raise OSError("installed distribution RECORD exceeds its row limit")
+            if len(row) != 3 or any(len(field) > MAX_DISTRIBUTION_RECORD_FIELD_CHARS for field in row):
+                raise OSError("installed distribution RECORD contains an invalid row")
+            record_path, digest, size = row
+            if (
+                not record_path
+                or len(record_path) > MAX_DISTRIBUTION_RECORD_PATH_CHARS
+                or record_path in seen_paths
+            ):
+                raise OSError("installed distribution RECORD contains an invalid or duplicate path")
+            seen_paths.add(record_path)
+            rows.append((record_path, digest, size))
+    except csv.Error as exc:
+        raise OSError("installed distribution RECORD is malformed") from exc
+    return tuple(rows)
+
+
+def _read_distribution_record(
+    dist_info: Path,
+    identity: tuple[int, int],
+) -> bytes:
+    if os.name == "posix":
+        directory_fd = _open_absolute_directory(dist_info)
+        try:
+            opened = os.fstat(directory_fd)
+            if (opened.st_dev, opened.st_ino) != identity:
+                raise OSError("installed distribution metadata changed before it could be read")
+            return _read_relative_regular_bytes(
+                directory_fd,
+                "RECORD",
+                limit=MAX_DISTRIBUTION_RECORD_BYTES,
+                reject_hardlinks=True,
+            )
+        finally:
+            os.close(directory_fd)
+
+    if os.name == "nt":  # pragma: no cover - exercised by hosted Windows
+        handle = _open_windows_directory_handle(dist_info, identity)
+        try:
+            return _read_regular_bytes(
+                dist_info / "RECORD",
+                limit=MAX_DISTRIBUTION_RECORD_BYTES,
+                reject_hardlinks=True,
+            )
+        finally:
+            active_error = sys.exc_info()[0] is not None
+            try:
+                _close_windows_handle(handle)
+            except OSError:
+                if not active_error:
+                    raise
+
+    raise OSError("installed distribution metadata cannot be pinned on this platform")
+
+
+def _bundled_source() -> _BundledSource:
+    """Bind the executing code and bundled resources to one immutable source snapshot."""
+
     executing_module = Path(__file__).resolve()
     source_checkout = executing_module.parents[2]
     source_module = source_checkout / "src" / "agent_docs_doctor" / "installer.py"
@@ -585,44 +882,155 @@ def bundled_skill_root() -> Path:
         is_source_checkout = source_module.resolve(strict=True) == executing_module
     except OSError:
         is_source_checkout = False
-    if is_source_checkout and (source_checkout / "SKILL.md").is_file():
-        return source_checkout
+    if is_source_checkout:
+        try:
+            root_stat = source_checkout.lstat()
+            skill_stat = (source_checkout / "SKILL.md").lstat()
+        except OSError as exc:
+            raise OSError("bundled source-checkout resources are unavailable") from exc
+        if (
+            _is_link_like(source_checkout, root_stat)
+            or not stat.S_ISDIR(root_stat.st_mode)
+            or _is_link_like(source_checkout / "SKILL.md", skill_stat)
+            or not stat.S_ISREG(skill_stat.st_mode)
+        ):
+            raise OSError("bundled source-checkout resources are invalid")
+        return _BundledSource(
+            source_checkout,
+            root_identity=(root_stat.st_dev, root_stat.st_ino),
+        )
 
     try:
         distribution = metadata.distribution("agent-docs-doctor")
-    except metadata.PackageNotFoundError:
-        distribution = None
-    if distribution is not None:
-        files = tuple(distribution.files or ())
-        code_matches = False
-        for item in files:
-            if not item.as_posix().endswith("agent_docs_doctor/installer.py"):
-                continue
-            try:
-                located = Path(str(distribution.locate_file(item))).resolve(strict=True)
-            except OSError:
-                continue
-            if located == executing_module:
-                code_matches = True
-                break
-        if code_matches:
-            for item in files:
-                if item.as_posix().endswith("share/agent-docs-doctor/skill/SKILL.md"):
-                    candidate = Path(str(distribution.locate_file(item))).parent
-                    if (candidate / "SKILL.md").is_file():
-                        return candidate
-    raise FileNotFoundError("bundled Agent Skill resources are unavailable")
-
-
-def _resolved_skill_root() -> Path:
+    except metadata.PackageNotFoundError as exc:
+        raise FileNotFoundError("bundled Agent Skill resources are unavailable") from exc
+    dist_info_value = getattr(distribution, "_path", None)
+    if dist_info_value is None:
+        raise OSError("installed distribution metadata location is unavailable")
+    dist_info = Path(dist_info_value)
     try:
-        root = bundled_skill_root()
+        dist_info_stat = dist_info.lstat()
+    except OSError as exc:
+        raise OSError("installed distribution metadata is unavailable") from exc
+    if (
+        not dist_info.name.endswith(".dist-info")
+        or _is_link_like(dist_info, dist_info_stat)
+        or not stat.S_ISDIR(dist_info_stat.st_mode)
+    ):
+        raise OSError("installed distribution metadata location is invalid")
+    dist_info_identity = (dist_info_stat.st_dev, dist_info_stat.st_ino)
+    dist_info = dist_info.resolve(strict=True)
+    raw_record = _read_distribution_record(dist_info, dist_info_identity)
+    rows = _parse_distribution_record(raw_record)
+    distribution_root = dist_info.parent
+    marker = ("share", "agent-docs-doctor", "skill")
+    code_record: tuple[str, int] | None = None
+    resource_rows: dict[str, tuple[Path, str, int]] = {}
+
+    for record_path, digest_field, size_field in rows:
+        parts = PurePosixPath(record_path).parts
+        if (
+            len(parts) >= 2
+            and parts[-2:] == ("agent_docs_doctor", "installer.py")
+            and _record_location(distribution_root, record_path) == executing_module
+        ):
+            if code_record is not None:
+                raise OSError("installed distribution contains duplicate executing-module records")
+            if re.fullmatch(r"sha256=[A-Za-z0-9_-]{43}", digest_field) is None:
+                raise OSError("installed distribution has an invalid executing-module record")
+            if re.fullmatch(r"0|[1-9][0-9]*", size_field) is None:
+                raise OSError("installed distribution has an invalid executing-module record")
+            code_size = int(size_field)
+            if code_size > MAX_SOURCE_FILE_BYTES:
+                raise OSError("installed distribution has an invalid executing-module record")
+            code_record = (digest_field.removeprefix("sha256="), code_size)
+
+        marker_index = next(
+            (
+                index
+                for index in range(len(parts) - len(marker) + 1)
+                if parts[index : index + len(marker)] == marker
+            ),
+            None,
+        )
+        if marker_index is None:
+            continue
+        relative = PurePosixPath(*parts[marker_index + len(marker) :]).as_posix()
+        if relative not in SOURCE_RELATIVE_PATHS:
+            raise OSError("installed distribution contains an unexpected bundled skill record")
+        if relative in resource_rows:
+            raise OSError("installed distribution contains duplicate bundled skill records")
+        if re.fullmatch(r"sha256=[A-Za-z0-9_-]{43}", digest_field) is None:
+            raise OSError("installed distribution has an invalid bundled skill record")
+        if re.fullmatch(r"0|[1-9][0-9]*", size_field) is None:
+            raise OSError("installed distribution has an invalid bundled skill record")
+        size = int(size_field)
+        if size > MAX_SOURCE_FILE_BYTES:
+            raise OSError("installed distribution has an invalid bundled skill record")
+        resource_rows[relative] = (
+            _record_location(distribution_root, record_path),
+            digest_field.removeprefix("sha256="),
+            size,
+        )
+
+    if code_record is None:
+        raise FileNotFoundError("installed distribution does not own the executing installer")
+    code_digest, code_size = code_record
+    code_payload = _read_regular_bytes(
+        executing_module,
+        limit=MAX_SOURCE_FILE_BYTES,
+        reject_hardlinks=True,
+        expected_size=code_size,
+    )
+    if _record_sha256(code_payload) != code_digest:
+        raise OSError("executing installer does not match its installed distribution record")
+    if set(resource_rows) != set(SOURCE_RELATIVE_PATHS):
+        raise OSError("installed distribution bundled skill records are incomplete")
+
+    root = resource_rows["SKILL.md"][0].parent
+    try:
+        root_stat = root.lstat()
+    except OSError as exc:
+        raise OSError("installed distribution skill root is unavailable") from exc
+    if _is_link_like(root, root_stat) or not stat.S_ISDIR(root_stat.st_mode):
+        raise OSError("installed distribution skill root is invalid")
+    root = root.resolve(strict=True)
+    for relative, (located, _digest, _size) in resource_rows.items():
+        expected = (root / Path(*PurePosixPath(relative).parts)).resolve(strict=True)
+        if located != expected:
+            raise OSError("installed distribution bundled skill record points outside its skill root")
+    records = tuple(
+        sorted((relative, digest, size) for relative, (_located, digest, size) in resource_rows.items())
+    )
+    return _BundledSource(
+        root,
+        records,
+        root_identity=(root_stat.st_dev, root_stat.st_ino),
+    )
+
+
+def bundled_skill_root() -> Path:
+    return _bundled_source().root
+
+
+def _resolved_skill_source() -> _BundledSource:
+    source = _bundled_source()
+    root = source.root
+    try:
         root_stat = root.lstat()
     except OSError as exc:
         raise OSError("bundled skill root is unavailable") from exc
     if _is_link_like(root, root_stat) or not stat.S_ISDIR(root_stat.st_mode):
         raise OSError("bundled skill root must be a regular directory")
-    return root.resolve(strict=True)
+    resolved = root.resolve(strict=True)
+    identity = (root_stat.st_dev, root_stat.st_ino)
+    if source.root_identity is not None and identity != source.root_identity:
+        raise OSError("bundled skill root changed while it was being resolved")
+    return replace(source, root=resolved, root_identity=identity)
+
+
+def _resolved_skill_root() -> Path:
+    return _resolved_skill_source().root
 
 
 def _bounded_child_names(directory: Path, expected_count: int) -> set[str]:
@@ -656,12 +1064,21 @@ def _read_open_regular_bytes(
     *,
     limit: int,
     reject_hardlinks: bool,
+    expected_size: int | None = None,
+    expected_snapshot: os.stat_result | None = None,
 ) -> bytes:
     opened = os.fstat(descriptor)
     if not stat.S_ISREG(opened.st_mode) or opened.st_size > limit:
         raise OSError("refusing a changed or oversized installer file")
+    if expected_snapshot is not None and not _same_installer_path_snapshot(
+        expected_snapshot,
+        opened,
+    ):
+        raise OSError("installer file changed before it could be read")
     if reject_hardlinks and opened.st_nlink > 1:
         raise OSError("refusing a hard-linked installer file")
+    if expected_size is not None and opened.st_size != expected_size:
+        raise OSError("installer file size does not match its trusted record")
     chunks: list[bytes] = []
     remaining = limit + 1
     while remaining:
@@ -691,6 +1108,8 @@ def _read_relative_regular_bytes(
     *,
     limit: int,
     reject_hardlinks: bool,
+    expected_size: int | None = None,
+    expected_snapshot: os.stat_result | None = None,
 ) -> bytes:
     parts = PurePosixPath(relative).parts
     if not parts or ".." in parts:
@@ -709,6 +1128,8 @@ def _read_relative_regular_bytes(
                 file_fd,
                 limit=limit,
                 reject_hardlinks=reject_hardlinks,
+                expected_size=expected_size,
+                expected_snapshot=expected_snapshot,
             )
         finally:
             os.close(file_fd)
@@ -716,19 +1137,123 @@ def _read_relative_regular_bytes(
         os.close(descriptor)
 
 
-def _source_payload_snapshot(root: Path | None = None) -> dict[str, bytes]:
-    root = root if root is not None else _resolved_skill_root()
-    if not _secure_mutation_supported():
-        return {
-            path.relative_to(root).as_posix(): _read_regular_bytes(
+def _windows_source_payload_snapshot(
+    source: _BundledSource,
+    distribution_records: dict[str, tuple[str, int]],
+) -> dict[str, bytes]:
+    """Read one Windows source snapshot while non-delete-sharing handles pin its directories."""
+
+    if source.root_identity is None:
+        raise OSError("bundled skill root has no captured identity")
+    root = source.root
+    handles = [_open_windows_directory_handle(root, source.root_identity)]
+    directory_expectations = {
+        "agents": {"openai.yaml"},
+        "references": {
+            PurePosixPath(relative).name
+            for relative in SOURCE_RELATIVE_PATHS
+            if relative.startswith("references/")
+        },
+    }
+    snapshots: list[tuple[str, Path, os.stat_result]] = []
+    try:
+        for relative, expected_names in directory_expectations.items():
+            directory = root / relative
+            try:
+                directory_stat = directory.lstat()
+            except OSError as exc:
+                raise OSError("bundled skill directory is unavailable") from exc
+            if _is_link_like(directory, directory_stat) or not stat.S_ISDIR(directory_stat.st_mode):
+                raise OSError("bundled skill directory is not a safe directory")
+            handles.append(
+                _open_windows_directory_handle(
+                    directory,
+                    (directory_stat.st_dev, directory_stat.st_ino),
+                )
+            )
+            if _bounded_child_names(directory, len(expected_names)) != expected_names:
+                raise OSError("bundled skill directory does not match the static public allowlist")
+
+        for relative in SOURCE_RELATIVE_PATHS:
+            path = root / Path(*PurePosixPath(relative).parts)
+            try:
+                path_stat = path.lstat()
+            except OSError as exc:
+                raise OSError("a required bundled skill file is unavailable") from exc
+            if path_stat.st_ino <= 0 or _is_link_like(path, path_stat) or not stat.S_ISREG(path_stat.st_mode):
+                raise OSError("a required bundled skill file is not a stable regular file")
+            if path_stat.st_nlink > 1:
+                raise OSError("a required bundled skill file is hard-linked")
+            expected_size = distribution_records.get(relative, ("", None))[1]
+            if expected_size is not None and path_stat.st_size != expected_size:
+                raise OSError("installer file size does not match its trusted record")
+            snapshots.append((relative, path, path_stat))
+
+        payloads: dict[str, bytes] = {}
+        total = 0
+        for relative, path, path_stat in snapshots:
+            payload = _read_regular_bytes(
                 path,
                 limit=MAX_SOURCE_FILE_BYTES,
+                reject_hardlinks=True,
+                expected_size=distribution_records.get(relative, ("", None))[1],
+                expected_snapshot=path_stat,
             )
-            for path in _source_files(root)
-        }
+            total += len(payload)
+            if total > MAX_SOURCE_TOTAL_BYTES:
+                raise OSError("bundled skill exceeds the aggregate installer safety limit")
+            payloads[relative] = payload
+
+        for _relative, path, expected in snapshots:
+            try:
+                visible = path.lstat()
+            except OSError as exc:
+                raise OSError("bundled skill file changed during its snapshot") from exc
+            if not _same_installer_path_snapshot(expected, visible):
+                raise OSError("bundled skill file changed during its snapshot")
+        for relative, expected_names in directory_expectations.items():
+            if _bounded_child_names(root / relative, len(expected_names)) != expected_names:
+                raise OSError("bundled skill directory changed during inventory")
+        _verify_distribution_payload_records(payloads, distribution_records)
+        return payloads
+    finally:
+        active_error = sys.exc_info()[0] is not None
+        close_error: OSError | None = None
+        for handle in reversed(handles):
+            try:
+                _close_windows_handle(handle)
+            except OSError as exc:
+                if close_error is None:
+                    close_error = exc
+        if close_error is not None and not active_error:
+            raise close_error
+
+
+def _source_payload_snapshot(root: Path | None = None) -> dict[str, bytes]:
+    if root is None:
+        source = _resolved_skill_source()
+    else:
+        try:
+            root_stat = root.lstat()
+        except OSError as exc:
+            raise OSError("bundled skill root is unavailable") from exc
+        source = _BundledSource(
+            root.resolve(strict=True),
+            root_identity=(root_stat.st_dev, root_stat.st_ino),
+        )
+    root = source.root
+    distribution_records = {relative: (digest, size) for relative, digest, size in source.records}
+    if os.name == "nt":  # pragma: no cover - exercised by hosted Windows
+        return _windows_source_payload_snapshot(source, distribution_records)
+    if os.name != "posix":
+        raise OSError("bundled skill source cannot be pinned on this platform")
 
     root_fd = _open_absolute_directory(root)
+    directory_fds: dict[str, int] = {}
     try:
+        opened_root = os.fstat(root_fd)
+        if source.root_identity != (opened_root.st_dev, opened_root.st_ino):
+            raise OSError("bundled skill root changed before it could be read")
         directory_expectations = {
             "agents": {"openai.yaml"},
             "references": {
@@ -737,43 +1262,117 @@ def _source_payload_snapshot(root: Path | None = None) -> dict[str, bytes]:
                 if relative.startswith("references/")
             },
         }
+        directory_snapshots: dict[str, os.stat_result] = {}
         for relative, expected_names in directory_expectations.items():
             directory_fd = os.open(relative, _directory_open_flags(), dir_fd=root_fd)
+            directory_fds[relative] = directory_fd
+            opened_directory = os.fstat(directory_fd)
+            if not stat.S_ISDIR(opened_directory.st_mode):
+                raise OSError("bundled skill directory is not a safe directory")
+            if _bounded_child_names_fd(directory_fd, len(expected_names)) != expected_names:
+                raise OSError("bundled skill directory does not match the static public allowlist")
+            after_inventory = os.fstat(directory_fd)
+            if not _same_installer_path_snapshot(opened_directory, after_inventory):
+                raise OSError("bundled skill directory changed during inventory")
+            directory_snapshots[relative] = opened_directory
+
+        file_snapshots: list[tuple[str, int, str, os.stat_result]] = []
+        for relative in SOURCE_RELATIVE_PATHS:
+            pure_relative = PurePosixPath(relative)
+            if not pure_relative.name:
+                raise OSError("invalid bundled skill relative path")
+            parent = pure_relative.parts[0] if "/" in relative else ""
+            parent_fd = directory_fds[parent] if parent else root_fd
+            leaf = pure_relative.name
             try:
-                if _bounded_child_names_fd(directory_fd, len(expected_names)) != expected_names:
-                    raise OSError("bundled skill directory does not match the static public allowlist")
-            finally:
-                os.close(directory_fd)
+                file_stat = os.stat(
+                    leaf,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise OSError("a required bundled skill file is unavailable") from exc
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise OSError("a required bundled skill file is not a regular file")
+            if file_stat.st_nlink > 1:
+                raise OSError("a required bundled skill file is hard-linked")
+            expected_size = distribution_records.get(relative, ("", None))[1]
+            if expected_size is not None and file_stat.st_size != expected_size:
+                raise OSError("installer file size does not match its trusted record")
+            file_snapshots.append((relative, parent_fd, leaf, file_stat))
 
         payloads: dict[str, bytes] = {}
         total = 0
-        for relative in SOURCE_RELATIVE_PATHS:
+        for relative, parent_fd, leaf, file_stat in file_snapshots:
             payload = _read_relative_regular_bytes(
-                root_fd,
-                relative,
+                parent_fd,
+                leaf,
                 limit=MAX_SOURCE_FILE_BYTES,
                 reject_hardlinks=True,
+                expected_size=distribution_records.get(relative, ("", None))[1],
+                expected_snapshot=file_stat,
             )
             total += len(payload)
             if total > MAX_SOURCE_TOTAL_BYTES:
                 raise OSError("bundled skill exceeds the aggregate installer safety limit")
             payloads[relative] = payload
 
-        # The held descriptors make replacement unable to redirect reads. Recheck the
-        # inventories so concurrent additions also fail the snapshot.
-        for relative, expected_names in directory_expectations.items():
-            directory_fd = os.open(relative, _directory_open_flags(), dir_fd=root_fd)
+        for _relative, parent_fd, leaf, expected in file_snapshots:
             try:
-                if _bounded_child_names_fd(directory_fd, len(expected_names)) != expected_names:
+                visible = os.stat(
+                    leaf,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise OSError("bundled skill file changed during its snapshot") from exc
+            if not _same_installer_path_snapshot(expected, visible):
+                raise OSError("bundled skill file changed during its snapshot")
+
+        for relative, expected_names in directory_expectations.items():
+            directory_fd = directory_fds[relative]
+            if _bounded_child_names_fd(directory_fd, len(expected_names)) != expected_names:
+                raise OSError("bundled skill directory changed during inventory")
+            after = os.fstat(directory_fd)
+            if not _same_installer_path_snapshot(directory_snapshots[relative], after):
+                raise OSError("bundled skill directory changed during inventory")
+            try:
+                visible_fd = os.open(relative, _directory_open_flags(), dir_fd=root_fd)
+            except OSError as exc:
+                raise OSError("bundled skill directory changed during inventory") from exc
+            try:
+                visible = os.fstat(visible_fd)
+                if visible.st_dev != after.st_dev or visible.st_ino != after.st_ino:
                     raise OSError("bundled skill directory changed during inventory")
             finally:
-                os.close(directory_fd)
+                os.close(visible_fd)
+        _verify_distribution_payload_records(payloads, distribution_records)
         return payloads
     finally:
+        for descriptor in reversed(tuple(directory_fds.values())):
+            os.close(descriptor)
         os.close(root_fd)
 
 
-def _source_files(root: Path | None = None) -> tuple[Path, ...]:
+def _verify_distribution_payload_records(
+    payloads: dict[str, bytes],
+    records: dict[str, tuple[str, int]],
+) -> None:
+    if not records:
+        return
+    if set(payloads) != set(records):
+        raise OSError("bundled skill payload does not match installed distribution records")
+    for relative, payload in payloads.items():
+        expected_digest, expected_size = records[relative]
+        if len(payload) != expected_size or _record_sha256(payload) != expected_digest:
+            raise OSError("bundled skill payload does not match its installed distribution record")
+
+
+def _source_files(
+    root: Path | None = None,
+    *,
+    reject_hardlinks: bool = True,
+) -> tuple[Path, ...]:
     root = root if root is not None else _resolved_skill_root()
     files: list[Path] = []
     for relative in SOURCE_RELATIVE_PATHS:
@@ -784,7 +1383,7 @@ def _source_files(root: Path | None = None) -> tuple[Path, ...]:
             raise OSError("a required bundled skill file is unavailable") from exc
         if _is_link_like(path, path_stat) or not stat.S_ISREG(path_stat.st_mode):
             raise OSError("a required bundled skill file is not a regular file")
-        if path_stat.st_nlink > 1:
+        if reject_hardlinks and path_stat.st_nlink > 1:
             raise OSError("a required bundled skill file is hard-linked")
         files.append(path)
 
@@ -838,8 +1437,7 @@ def _manifest_from_payloads(client: str, payloads: dict[str, bytes]) -> dict[str
 
 
 def _desired_manifest(client: str) -> dict[str, Any]:
-    root = _resolved_skill_root()
-    return _manifest_from_payloads(client, _source_payload_snapshot(root))
+    return _manifest_from_payloads(client, _source_payload_snapshot())
 
 
 def _unique_manifest_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
