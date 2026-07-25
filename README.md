@@ -143,7 +143,7 @@ The deterministic engine finds facts. The skill helps interpret them. Neither tr
 - `AGENTS.md`, `AGENTS.override.md`, and configured Codex fallback names;
 - `CLAUDE.md` imports and `.claude/rules`;
 - `.cursor/rules`;
-- project and user Agent Skills;
+- Agent Skill manifests and supporting files located inside the requested root;
 - status, handoff, work-queue, authority, and planning documents;
 - configuration that changes instruction selection;
 - exact substantive overlap without copying paragraph bodies into the report;
@@ -457,6 +457,14 @@ unavailable, or an ancestor was aliased or replaced, collection fails closed bef
 candidate bytes or directory entries and coverage becomes partial. Non-printing Unicode paths are
 shown only as one-way hash markers so directionality and zero-width controls cannot spoof a
 terminal display.
+
+On Windows, traversal holds native directory identity handles and revalidates their visible paths
+and identities around each path-based enumeration. It does not assume that an open directory
+prevents rename. Because cached Windows directory-entry metadata omits device, inode, and link-count
+identity fields, the auditor refreshes those fields before replacement and hard-link checks.
+Candidate reads use non-inheritable binary descriptors backed by native handles that deny
+concurrent write and delete access. An identity change fails closed and makes coverage partial
+instead of allowing bytes from a replacement path into the report.
 
 Ignore files reduce exposure; they are not security sandboxes. Filesystem permissions remain the
 correct enforcement boundary for secrets. Hard links cannot be safely classified from a filename
