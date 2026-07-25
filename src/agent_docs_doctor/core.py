@@ -187,6 +187,47 @@ def _same_file_snapshot(
     )
 
 
+def _same_existing_path(left: Path, right: Path) -> bool:
+    """Compare two existing path spellings without rejecting Windows aliases."""
+
+    if os.name == "nt":
+        try:
+            return os.path.samefile(left, right)
+        except OSError:
+            return False
+    return os.path.normcase(os.path.abspath(os.fspath(left))) == os.path.normcase(
+        os.path.abspath(os.fspath(right))
+    )
+
+
+def _canonical_existing_path(path: Path) -> Path:
+    """Return a comparison-only canonical spelling for an existing path."""
+
+    if os.name == "nt":
+        return Path(os.path.realpath(os.path.abspath(os.fspath(path))))
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _existing_path_within_root(path: Path, root: Path) -> bool:
+    try:
+        _canonical_existing_path(path).relative_to(_canonical_existing_path(root))
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+@dataclass(frozen=True)
+class _WindowsPinnedDirectory:
+    """Path-like directory token backed by one held native identity handle."""
+
+    path: Path
+    handle: int
+    identity: tuple[int, int]
+
+    def __fspath__(self) -> str:
+        return os.fspath(self.path)
+
+
 def _windows_handle_resolved_path(handle: int) -> Path | None:
     """Return the final path for an already opened Windows handle."""
 
@@ -254,6 +295,80 @@ def _windows_directory_functions() -> tuple[Any, Any, Any, Any]:
         return create_file, get_final_path, close_handle, get_attributes
     except (AttributeError, OSError, ValueError) as exc:
         raise OSError("Windows directory APIs are unavailable") from exc
+
+
+def _windows_pinned_directory_unchanged(pinned: _WindowsPinnedDirectory) -> bool:
+    """Revalidate both the held object and the pathname that should expose it."""
+
+    if os.name != "nt":
+        return False
+    resolved_handle_path = _windows_handle_resolved_path(pinned.handle)
+    if resolved_handle_path is None:
+        return False
+    if not _same_existing_path(resolved_handle_path, pinned.path):
+        return False
+    try:
+        visible = pinned.path.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(visible.st_mode)
+        and not _stat_is_reparse_point(visible)
+        and not pinned.path.is_symlink()
+        and (visible.st_dev, visible.st_ino) == pinned.identity
+    )
+
+
+def _open_windows_file_descriptor(path: Path, expected: os.stat_result) -> int:
+    """Open one stable file while denying concurrent write and delete access."""
+
+    if os.name != "nt":
+        raise OSError("Windows file pinning is unavailable")
+    handle: int | None = None
+    close_handle: Any | None = None
+    try:  # pragma: no cover - exercised by the hosted Windows matrix
+        import msvcrt
+
+        create_file, _get_final_path, close_handle, _get_attributes = _windows_directory_functions()
+        raw_handle = create_file(
+            os.fspath(path),
+            0x80000000,  # GENERIC_READ
+            0x1,  # FILE_SHARE_READ; deliberately no WRITE or DELETE
+            None,
+            3,  # OPEN_EXISTING
+            0x00200000,  # FILE_FLAG_OPEN_REPARSE_POINT
+            None,
+        )
+        import ctypes
+
+        invalid_handle = ctypes.c_void_p(-1).value
+        handle_value = getattr(raw_handle, "value", raw_handle)
+        if handle_value in (None, invalid_handle):
+            raise OSError("file could not be pinned")
+        handle = int(handle_value)
+        resolved_handle_path = _windows_handle_resolved_path(handle)
+        if resolved_handle_path is None:
+            raise OSError("pinned file path could not be verified")
+        if not _same_existing_path(resolved_handle_path, path):
+            raise OSError("file path changed while it was being pinned")
+        visible = path.lstat()
+        if (
+            not stat.S_ISREG(visible.st_mode)
+            or _stat_is_reparse_point(visible)
+            or path.is_symlink()
+            or not _same_file_snapshot(expected, visible, compare_change_time=False)
+        ):
+            raise OSError("file identity changed while it was being pinned")
+        descriptor = msvcrt.open_osfhandle(
+            handle,
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0),
+        )
+        handle = None
+        return descriptor
+    except (AttributeError, OSError, ValueError) as exc:
+        if handle is not None and (close_handle is None or not close_handle(handle)):
+            raise OSError("failed to close an unverified file pin") from exc
+        raise OSError("file could not be pinned safely") from exc
 
 
 def _descriptor_resolved_path(descriptor: int) -> Path | None:
@@ -346,7 +461,11 @@ def read_bounded_input(
     flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor: int | None = None
     try:
-        descriptor = os.open(open_path, flags)
+        descriptor = (
+            _open_windows_file_descriptor(open_path, expected)
+            if os.name == "nt"
+            else os.open(open_path, flags)
+        )
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
             raise ValueError("input is not a regular file")
@@ -367,13 +486,17 @@ def read_bounded_input(
         if resolved_allowed_root is not None:
             if descriptor_path is None:
                 raise ValueError("opened input location could not be verified")
-            actual_path = Path(os.path.abspath(os.fspath(descriptor_path)))
-            expected_path = Path(os.path.abspath(os.fspath(open_path)))
+            if not _existing_path_within_root(descriptor_path, resolved_allowed_root):
+                raise ValueError("opened input escapes the allowed root")
             try:
-                relative_actual = PurePosixPath(actual_path.relative_to(resolved_allowed_root).as_posix())
+                relative_actual = PurePosixPath(
+                    _canonical_existing_path(descriptor_path)
+                    .relative_to(_canonical_existing_path(resolved_allowed_root))
+                    .as_posix()
+                )
             except (OSError, ValueError) as exc:
                 raise ValueError("opened input escapes the allowed root") from exc
-            if os.path.normcase(os.fspath(actual_path)) != os.path.normcase(os.fspath(expected_path)):
+            if not _same_existing_path(descriptor_path, open_path):
                 raise ValueError("opened input path changed while it was being verified")
             if is_secret_path(relative_actual):
                 raise ValueError("opened input targets a secret-like path")
@@ -675,8 +798,11 @@ def _stat_is_reparse_point(value: os.stat_result) -> bool:
     return bool(attributes & reparse_flag)
 
 
-def _open_pinned_directory(path: Path, allowed_root: Path) -> tuple[int | Path, Any]:
-    """Pin a directory against path replacement for one bounded enumeration."""
+def _open_pinned_directory(
+    path: Path,
+    allowed_root: Path,
+) -> tuple[int | Path | _WindowsPinnedDirectory, Any]:
+    """Hold and revalidate one directory identity for bounded enumeration."""
 
     if os.name != "nt":
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
@@ -704,16 +830,26 @@ def _open_pinned_directory(path: Path, allowed_root: Path) -> tuple[int | Path, 
         return descriptor, lambda: os.close(descriptor)
 
     # Windows lacks dir_fd support for scandir. Hold a native directory handle
-    # without FILE_SHARE_DELETE so the verified path cannot be exchanged while
-    # path-based enumeration is in progress.
+    # as an identity token and revalidate it around path-based enumeration.
+    # Hosted Windows permits rename despite a non-delete-sharing directory
+    # handle, so safety must not depend on rename denial.
     try:  # pragma: no cover - exercised by the hosted Windows matrix
         import ctypes
 
         create_file, _get_final_path, close_native_handle, get_attributes = _windows_directory_functions()
+        before = path.lstat()
+        if (
+            not stat.S_ISDIR(before.st_mode)
+            or _stat_is_reparse_point(before)
+            or path.is_symlink()
+            or before.st_ino <= 0
+        ):
+            raise OSError("filesystem entry is not a stable directory")
+        identity = (before.st_dev, before.st_ino)
         handle = create_file(
             os.fspath(path),
             0x80,  # FILE_READ_ATTRIBUTES
-            0x1 | 0x2,  # FILE_SHARE_READ | FILE_SHARE_WRITE
+            0x1 | 0x2 | 0x4,  # all FILE_SHARE_* modes; identity token, not a rename lock
             None,
             3,  # OPEN_EXISTING
             0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
@@ -728,18 +864,17 @@ def _open_pinned_directory(path: Path, allowed_root: Path) -> tuple[int | Path, 
             resolved_handle_path = _windows_handle_resolved_path(handle_value)
             if resolved_handle_path is None:
                 raise OSError("pinned directory path could not be verified")
-            actual = Path(os.path.abspath(os.fspath(resolved_handle_path)))
-            expected = Path(os.path.abspath(os.fspath(path)))
-            try:
-                actual.relative_to(Path(os.path.abspath(os.fspath(allowed_root))))
-            except ValueError:
+            if not _existing_path_within_root(resolved_handle_path, allowed_root):
                 raise OSError("pinned directory escaped the audit root") from None
-            if os.path.normcase(os.fspath(actual)) != os.path.normcase(os.fspath(expected)):
+            if not _same_existing_path(resolved_handle_path, path):
                 raise OSError("directory path contains an alias or changed while opening")
 
             attributes = get_attributes(os.fspath(path))
             if attributes == 0xFFFFFFFF or not attributes & 0x10 or attributes & 0x400:
                 raise OSError("filesystem entry is not a safe directory")
+            pinned = _WindowsPinnedDirectory(path, handle_value, identity)
+            if not _windows_pinned_directory_unchanged(pinned):
+                raise OSError("directory identity changed while it was being pinned")
         except BaseException as exc:
             if not close_native_handle(handle_value):
                 raise OSError("unverified directory pin could not be closed") from exc
@@ -749,9 +884,57 @@ def _open_pinned_directory(path: Path, allowed_root: Path) -> tuple[int | Path, 
             if not close_native_handle(handle_value):
                 raise OSError("pinned directory handle could not be closed")
 
-        return path, close_handle
+        return pinned, close_handle
     except (AttributeError, OSError, ValueError) as exc:
         raise OSError("directory could not be pinned safely") from exc
+
+
+def _pinned_directory_unchanged(
+    scan_target: int | Path | _WindowsPinnedDirectory,
+    path: Path,
+) -> bool:
+    if isinstance(scan_target, int):
+        try:
+            current = path.lstat()
+            return stat.S_ISDIR(current.st_mode) and _same_file_snapshot(
+                os.fstat(scan_target),
+                current,
+            )
+        except OSError:
+            return False
+    if isinstance(scan_target, _WindowsPinnedDirectory):
+        return _windows_pinned_directory_unchanged(scan_target)
+    try:
+        current = path.lstat()
+        return (
+            stat.S_ISDIR(current.st_mode) and not is_link_like(path) and not _stat_is_reparse_point(current)
+        )
+    except OSError:
+        return False
+
+
+def _directory_entry_records_match(
+    left: list[tuple[str, os.stat_result | None, bool]],
+    right: list[tuple[str, os.stat_result | None, bool]],
+) -> bool:
+    def stable_fields(
+        record: tuple[str, os.stat_result | None, bool],
+    ) -> tuple[Any, ...]:
+        name, info, link_like = record
+        if info is None:
+            return name, None, link_like
+        return (
+            name,
+            _file_identity(info),
+            stat.S_IFMT(info.st_mode),
+            info.st_size,
+            getattr(info, "st_mtime_ns", None),
+            getattr(info, "st_nlink", None),
+            _stat_is_reparse_point(info),
+            link_like,
+        )
+
+    return sorted(map(stable_fields, left)) == sorted(map(stable_fields, right))
 
 
 def is_candidate(relative: PurePosixPath, fallback_names: frozenset[str] = frozenset()) -> bool:
@@ -942,6 +1125,17 @@ def walk_candidates(
         entry_records: list[tuple[str, os.stat_result | None, bool]] = []
         overflow = False
         try:
+            if not _pinned_directory_unchanged(scan_target, current_path):
+                incomplete = True
+                matcher.coverage_reasons.add("directory changed during traversal")
+                skipped.append(
+                    {
+                        "path": PurePosixPath(rel_current.as_posix()).as_posix(),
+                        "reason": "directory changed during traversal",
+                    }
+                )
+                continue
+            rule_count = len(matcher.rules)
             if not matcher.add_nested_gitignore(
                 current_path,
                 PurePosixPath(rel_current.as_posix()),
@@ -961,22 +1155,26 @@ def walk_candidates(
                         entry_info = None
                         link_like = False
                     entry_records.append((entry.name, entry_info, link_like))
-            try:
-                current_info = current_path.lstat()
-                if isinstance(scan_target, int):
-                    pinned_info = os.fstat(scan_target)
-                    directory_changed = not stat.S_ISDIR(current_info.st_mode) or not _same_file_snapshot(
-                        pinned_info, current_info
-                    )
-                else:
-                    directory_changed = (
-                        not stat.S_ISDIR(current_info.st_mode)
-                        or is_link_like(current_path)
-                        or _stat_is_reparse_point(current_info)
-                    )
-            except OSError:
-                directory_changed = True
-            if directory_changed:
+            repeated_records: list[tuple[str, os.stat_result | None, bool]] = []
+            if os.name == "nt" and not overflow:
+                with os.scandir(scan_target) as entries:
+                    for entry in entries:
+                        if len(repeated_records) >= remaining:
+                            overflow = True
+                            break
+                        try:
+                            entry_info = entry.stat(follow_symlinks=False)
+                            link_like = entry.is_symlink() or _stat_is_reparse_point(entry_info)
+                        except OSError:
+                            entry_info = None
+                            link_like = False
+                        repeated_records.append((entry.name, entry_info, link_like))
+            if not _pinned_directory_unchanged(scan_target, current_path) or (
+                os.name == "nt"
+                and not overflow
+                and not _directory_entry_records_match(entry_records, repeated_records)
+            ):
+                del matcher.rules[rule_count:]
                 entry_records.clear()
                 incomplete = True
                 matcher.coverage_reasons.add("directory changed during traversal")
@@ -990,8 +1188,11 @@ def walk_candidates(
             walk_error(current_path, exc)
             continue
         finally:
-            with suppress(OSError):
+            try:
                 close_pinned()
+            except OSError as exc:
+                entry_records.clear()
+                walk_error(current_path, exc)
         if overflow:
             matcher.traversed_entries = MAX_WALK_ENTRIES
             incomplete = True

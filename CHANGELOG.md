@@ -71,19 +71,21 @@
   snapshot binds the executing module, exact static allowlist, byte counts, and SHA-256 values.
   Bundled-resource hard links are rejected before content read in every source mode; documented
   `uv` installation and distribution-smoke commands use copy mode.
-- Windows packaged-resource preview holds native non-delete-sharing directory handles,
-  non-write-sharing file handles, and pre-read file identities, so changes after identity capture
-  cannot redirect payload reads. POSIX snapshots likewise retain allowlisted subdirectory
-  descriptors and pre-read file identities through verification. Documentation now distinguishes
-  wheel `RECORD` integrity from package authenticity and discloses bounded read-then-reject
-  behavior for a singly linked path already altered before capture.
+- Windows packaged-resource preview holds native directory identity handles, revalidates their
+  visible paths and identities around every path-based inventory and read, and uses
+  non-write-sharing file handles plus pre-read file identities. It does not assume that an open
+  directory prevents rename on current Windows. POSIX snapshots likewise retain allowlisted
+  subdirectory descriptors and pre-read file identities through verification. Documentation now
+  distinguishes wheel `RECORD` integrity from package authenticity and discloses bounded
+  read-then-reject behavior for a singly linked path already altered before capture.
 - File reads use one bounded, nonblocking descriptor with regular-file and identity checks, so a
   candidate replaced by a FIFO or other non-regular object cannot block the audit.
 - Windows reads now use binary descriptors so raw-byte hashes preserve CRLF exactly. Cross-provider
   Windows pathname-to-descriptor checks use stable identity and metadata fields while retaining
-  full descriptor-to-descriptor change-time checks around reads. Native audit-directory pinning
-  now declares the exact Win32 `HANDLE` API types, denies delete sharing during enumeration, and
-  has a hosted Windows rename/close probe.
+  full descriptor-to-descriptor change-time checks around reads. Native audit reads deny
+  concurrent write/delete access; audit-directory identity handles declare the exact Win32
+  `HANDLE` API types and are revalidated before and after enumeration, including when the hosted
+  Windows runtime permits rename while the handle remains open.
 - POSIX reads and directory enumeration require descriptor-path resolution, exact intended-path
   equality, and requested-root containment before consuming bytes or entries.
 - Secret-like path components and multiply-linked candidates are excluded from reads.
