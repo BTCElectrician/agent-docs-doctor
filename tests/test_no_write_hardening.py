@@ -80,7 +80,7 @@ def test_snapshot_parent_swap_fails_before_out_of_root_content_read() -> None:
             patch.object(check_no_write, "_hash_regular", side_effect=record_hash),
             pytest.raises(
                 check_no_write.SnapshotLimitError,
-                match="entry changed before capture",
+                match="(entry changed before capture|directory changed before traversal)",
             ),
         ):
             check_no_write.snapshot(root)

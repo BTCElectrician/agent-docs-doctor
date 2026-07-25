@@ -52,12 +52,14 @@ Multiply-linked managed files are rejected without reading their contents. Bundl
 must come from the currently executing source checkout or installed distribution. An installed
 distribution is bound through one bounded, immutable wheel `RECORD` snapshot that must identify
 the executing module and every exact allowlisted resource, byte count, and SHA-256. Windows
-preview holds native non-delete-sharing directory handles and non-write-sharing file handles after
-capturing their identities. Bound files with multiple links are rejected before content read in
-every source mode. The documented `uv` installation uses copy mode to preserve this boundary.
-Wheel `RECORD` is an integrity manifest, not an authenticity signature. A singly linked expected
-package path already altered before identity capture requires a bounded read to detect its digest
-mismatch and is then rejected.
+preview holds native directory identity handles, revalidates their visible path and identity around
+every path-based inventory or read, and does not rely on an open directory preventing rename on
+current Windows. Native file handles deny concurrent write and delete access while bytes are read.
+Bound files with multiple links are rejected before content read in every source mode. The
+documented `uv` installation uses copy mode to preserve this boundary. Wheel `RECORD` is an
+integrity manifest, not an authenticity signature. A singly linked expected package path already
+altered before identity capture requires a bounded read to detect its digest mismatch and is then
+rejected.
 
 Creation, rollback, interruption recovery, and cleanup are identity-bound. If a tool-created
 private directory cannot be proved still visible, empty, and identical, the operation fails and

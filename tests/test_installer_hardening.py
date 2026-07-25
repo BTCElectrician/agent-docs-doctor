@@ -1429,21 +1429,42 @@ class WindowsInstallerPreviewTests(unittest.TestCase):
                 (pinned_stat.st_dev, pinned_stat.st_ino),
             )
             renamed = root / "renamed"
+            renamed_while_open = False
             try:
                 resolved = installer._windows_handle_resolved_path(handle)
                 self.assertIsNotNone(resolved)
                 if resolved is None:
                     self.fail("pinned Windows directory path was unavailable")
-                self.assertEqual(
-                    os.path.normcase(os.path.abspath(os.fspath(resolved))),
-                    os.path.normcase(os.path.abspath(os.fspath(pinned))),
+                self.assertTrue(os.path.samefile(resolved, pinned))
+                self.assertTrue(
+                    installer._windows_directory_handle_unchanged(
+                        handle,
+                        pinned,
+                        (pinned_stat.st_dev, pinned_stat.st_ino),
+                    )
                 )
-                with self.assertRaises(OSError):
+                try:
                     pinned.rename(renamed)
+                except OSError:
+                    pass
+                else:
+                    renamed_while_open = True
+                    pinned.mkdir()
+                    self.assertFalse(
+                        installer._windows_directory_handle_unchanged(
+                            handle,
+                            pinned,
+                            (pinned_stat.st_dev, pinned_stat.st_ino),
+                        )
+                    )
             finally:
                 installer._close_windows_handle(handle)
-            pinned.rename(renamed)
-            renamed.rename(pinned)
+            if renamed_while_open:
+                pinned.rmdir()
+                renamed.rename(pinned)
+            else:
+                pinned.rename(renamed)
+                renamed.rename(pinned)
 
             pinned_file = pinned / "payload.txt"
             pinned_file.write_text("public payload\n", encoding="utf-8")
@@ -1453,6 +1474,8 @@ class WindowsInstallerPreviewTests(unittest.TestCase):
             )
             try:
                 self.assertFalse(os.get_inheritable(file_descriptor))
+                with self.assertRaises(OSError):
+                    pinned_file.write_text("changed\n", encoding="utf-8")
                 self.assertEqual(os.read(file_descriptor, 1024), b"public payload\n")
             finally:
                 os.close(file_descriptor)

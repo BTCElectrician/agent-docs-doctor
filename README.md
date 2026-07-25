@@ -260,12 +260,14 @@ private residue; the installer does not infer ownership from the visible pathnam
 Installed bundled resources are accepted only when one bounded, immutable wheel `RECORD` snapshot
 binds the executing module and the exact static resource allowlist to their expected byte counts
 and SHA-256 values. Every bound file must be singly linked and is rejected before content read when
-it is hard-linked. Windows preview holds non-delete-sharing native directory handles and
-non-write-sharing file handles after capturing each identity. The documented `uv` command uses
-`--link-mode copy` so its installed files meet that boundary; source-checkout and other
-bundled-resource hard links are also rejected. Wheel `RECORD` is an integrity manifest, not an
-authenticity signature: a singly linked expected package path already altered before its identity
-is captured must be read within the byte limit to compare its digest, then fails closed.
+it is hard-linked. Windows preview holds native directory identity handles and revalidates each
+handle, visible path, and captured identity around every path-based inventory or file read; it does
+not assume an open directory prevents rename on current Windows. Native file handles deny
+concurrent write and delete access while bytes are read. The documented `uv` command uses
+`--link-mode copy` so its installed files meet that boundary; source-checkout and other bundled
+resource hard links are also rejected. Wheel `RECORD` is an integrity manifest, not an authenticity
+signature: a singly linked expected package path already altered before its identity is captured
+must be read within the byte limit to compare its digest, then fails closed.
 
 Preview is portable and no-write. Apply is supported only on Darwin and Linux runtimes with the
 required descriptor-relative filesystem operations; it fails closed on Windows and other

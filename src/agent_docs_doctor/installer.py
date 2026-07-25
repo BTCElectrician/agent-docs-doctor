@@ -84,6 +84,19 @@ class _BundledSource:
     root_identity: tuple[int, int] | None = None
 
 
+def _same_existing_path(left: Path, right: Path) -> bool:
+    """Compare two existing path spellings, including Windows short-name aliases."""
+
+    if os.name == "nt":
+        try:
+            return os.path.samefile(left, right)
+        except OSError:
+            return False
+    return os.path.normcase(os.path.abspath(os.fspath(left))) == os.path.normcase(
+        os.path.abspath(os.fspath(right))
+    )
+
+
 def _secure_mutation_supported() -> bool:
     """Return whether this runtime can mutate relative to held directory descriptors."""
     return (
@@ -567,7 +580,7 @@ def _open_windows_directory_handle(
     path: Path,
     expected_identity: tuple[int, int],
 ) -> int:
-    """Hold a non-delete-sharing Windows handle to one exact non-reparse directory."""
+    """Hold a Windows identity handle for one exact non-reparse directory."""
 
     if os.name != "nt":
         raise OSError("Windows directory pinning is unavailable")
@@ -578,7 +591,7 @@ def _open_windows_directory_handle(
         handle = create_file(
             os.fspath(path),
             0x80,  # FILE_READ_ATTRIBUTES
-            0x1 | 0x2,  # FILE_SHARE_READ | FILE_SHARE_WRITE; deliberately no DELETE
+            0x1 | 0x2 | 0x4,  # all FILE_SHARE_* modes; identity token, not a rename lock
             None,
             3,  # OPEN_EXISTING
             0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
@@ -592,9 +605,7 @@ def _open_windows_directory_handle(
             resolved_handle_path = _windows_handle_resolved_path(int(handle_value))
             if resolved_handle_path is None:
                 raise OSError("pinned directory path could not be verified")
-            actual = Path(os.path.abspath(os.fspath(resolved_handle_path)))
-            expected = Path(os.path.abspath(os.fspath(path)))
-            if os.path.normcase(os.fspath(actual)) != os.path.normcase(os.fspath(expected)):
+            if not _same_existing_path(resolved_handle_path, path):
                 raise OSError("directory path changed while it was being pinned")
             visible = path.lstat()
             if (
@@ -610,6 +621,29 @@ def _open_windows_directory_handle(
             raise
     except (AttributeError, OSError, ValueError) as exc:
         raise OSError("directory could not be pinned safely") from exc
+
+
+def _windows_directory_handle_unchanged(
+    handle: int,
+    path: Path,
+    expected_identity: tuple[int, int],
+) -> bool:
+    """Verify that a held directory handle is still exposed at the expected path."""
+
+    if os.name != "nt":
+        return False
+    resolved = _windows_handle_resolved_path(handle)
+    if resolved is None or not _same_existing_path(resolved, path):
+        return False
+    try:
+        visible = path.lstat()
+    except OSError:
+        return False
+    return (
+        not _is_link_like(path, visible)
+        and stat.S_ISDIR(visible.st_mode)
+        and (visible.st_dev, visible.st_ino) == expected_identity
+    )
 
 
 def _close_windows_handle(handle: int) -> None:
@@ -653,9 +687,7 @@ def _open_windows_file_descriptor(
         resolved_handle_path = _windows_handle_resolved_path(handle)
         if resolved_handle_path is None:
             raise OSError("pinned file path could not be verified")
-        actual = Path(os.path.abspath(os.fspath(resolved_handle_path)))
-        expected = Path(os.path.abspath(os.fspath(path)))
-        if os.path.normcase(os.fspath(actual)) != os.path.normcase(os.fspath(expected)):
+        if not _same_existing_path(resolved_handle_path, path):
             raise OSError("file path changed while it was being pinned")
         visible = path.lstat()
         if (
@@ -734,9 +766,7 @@ def _read_regular_bytes(
         descriptor_path = _descriptor_resolved_path(descriptor)
         if descriptor_path is None:
             raise OSError("installer file location could not be safely verified")
-        expected_path = Path(os.path.abspath(os.fspath(path)))
-        actual_path = Path(os.path.abspath(os.fspath(descriptor_path)))
-        if os.path.normcase(os.fspath(actual_path)) != os.path.normcase(os.fspath(expected_path)):
+        if not _same_existing_path(descriptor_path, path):
             raise OSError("installer file path changed while it was being opened")
         if reject_hardlinks and opened.st_nlink > 1:
             raise OSError("refusing a hard-linked installer file")
@@ -856,11 +886,16 @@ def _read_distribution_record(
     if os.name == "nt":  # pragma: no cover - exercised by hosted Windows
         handle = _open_windows_directory_handle(dist_info, identity)
         try:
-            return _read_regular_bytes(
+            if not _windows_directory_handle_unchanged(handle, dist_info, identity):
+                raise OSError("installed distribution metadata changed before it could be read")
+            payload = _read_regular_bytes(
                 dist_info / "RECORD",
                 limit=MAX_DISTRIBUTION_RECORD_BYTES,
                 reject_hardlinks=True,
             )
+            if not _windows_directory_handle_unchanged(handle, dist_info, identity):
+                raise OSError("installed distribution metadata changed while it was being read")
+            return payload
         finally:
             active_error = sys.exc_info()[0] is not None
             try:
@@ -1141,12 +1176,18 @@ def _windows_source_payload_snapshot(
     source: _BundledSource,
     distribution_records: dict[str, tuple[str, int]],
 ) -> dict[str, bytes]:
-    """Read one Windows source snapshot while non-delete-sharing handles pin its directories."""
+    """Read one Windows source snapshot with held, repeatedly revalidated identities."""
 
     if source.root_identity is None:
         raise OSError("bundled skill root has no captured identity")
     root = source.root
-    handles = [_open_windows_directory_handle(root, source.root_identity)]
+    handles = [
+        (
+            _open_windows_directory_handle(root, source.root_identity),
+            root,
+            source.root_identity,
+        )
+    ]
     directory_expectations = {
         "agents": {"openai.yaml"},
         "references": {
@@ -1156,7 +1197,25 @@ def _windows_source_payload_snapshot(
         },
     }
     snapshots: list[tuple[str, Path, os.stat_result]] = []
+
+    def verify_directories() -> None:
+        if any(
+            not _windows_directory_handle_unchanged(handle, path, identity)
+            for handle, path, identity in handles
+        ):
+            raise OSError("bundled skill directory changed during its source snapshot")
+
+    def verify_child_names(directory: Path, expected_names: set[str]) -> None:
+        verify_directories()
+        first = _bounded_child_names(directory, len(expected_names))
+        verify_directories()
+        second = _bounded_child_names(directory, len(expected_names))
+        verify_directories()
+        if first != expected_names or second != first:
+            raise OSError("bundled skill directory does not match the static public allowlist")
+
     try:
+        verify_directories()
         for relative, expected_names in directory_expectations.items():
             directory = root / relative
             try:
@@ -1165,15 +1224,18 @@ def _windows_source_payload_snapshot(
                 raise OSError("bundled skill directory is unavailable") from exc
             if _is_link_like(directory, directory_stat) or not stat.S_ISDIR(directory_stat.st_mode):
                 raise OSError("bundled skill directory is not a safe directory")
+            directory_identity = (directory_stat.st_dev, directory_stat.st_ino)
             handles.append(
-                _open_windows_directory_handle(
+                (
+                    _open_windows_directory_handle(directory, directory_identity),
                     directory,
-                    (directory_stat.st_dev, directory_stat.st_ino),
+                    directory_identity,
                 )
             )
-            if _bounded_child_names(directory, len(expected_names)) != expected_names:
-                raise OSError("bundled skill directory does not match the static public allowlist")
+            verify_directories()
+            verify_child_names(directory, expected_names)
 
+        verify_directories()
         for relative in SOURCE_RELATIVE_PATHS:
             path = root / Path(*PurePosixPath(relative).parts)
             try:
@@ -1192,6 +1254,7 @@ def _windows_source_payload_snapshot(
         payloads: dict[str, bytes] = {}
         total = 0
         for relative, path, path_stat in snapshots:
+            verify_directories()
             payload = _read_regular_bytes(
                 path,
                 limit=MAX_SOURCE_FILE_BYTES,
@@ -1203,6 +1266,7 @@ def _windows_source_payload_snapshot(
             if total > MAX_SOURCE_TOTAL_BYTES:
                 raise OSError("bundled skill exceeds the aggregate installer safety limit")
             payloads[relative] = payload
+            verify_directories()
 
         for _relative, path, expected in snapshots:
             try:
@@ -1212,14 +1276,14 @@ def _windows_source_payload_snapshot(
             if not _same_installer_path_snapshot(expected, visible):
                 raise OSError("bundled skill file changed during its snapshot")
         for relative, expected_names in directory_expectations.items():
-            if _bounded_child_names(root / relative, len(expected_names)) != expected_names:
-                raise OSError("bundled skill directory changed during inventory")
+            verify_child_names(root / relative, expected_names)
+        verify_directories()
         _verify_distribution_payload_records(payloads, distribution_records)
         return payloads
     finally:
         active_error = sys.exc_info()[0] is not None
         close_error: OSError | None = None
-        for handle in reversed(handles):
+        for handle, _path, _identity in reversed(handles):
             try:
                 _close_windows_handle(handle)
             except OSError as exc:

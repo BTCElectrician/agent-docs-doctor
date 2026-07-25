@@ -20,7 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from agent_docs_doctor import build_audit, validate_audit  # noqa: E402
 from agent_docs_doctor.core import (  # noqa: E402
     _descriptor_resolved_path,
+    _existing_path_within_root,
     _open_pinned_directory,
+    _open_windows_file_descriptor,
+    _pinned_directory_unchanged,
+    _same_existing_path,
     is_secret_path,
 )
 
@@ -93,6 +97,41 @@ def _same_file_snapshot(
     )
 
 
+def _same_directory_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
+    """Compare stable directory identity fields across Windows metadata providers."""
+
+    if os.name != "nt":
+        return _same_file_snapshot(left, right)
+    return (
+        _same_file_identity(left, right)
+        and stat.S_ISDIR(left.st_mode)
+        and stat.S_ISDIR(right.st_mode)
+        and _is_reparse_point(left) == _is_reparse_point(right)
+        and getattr(left, "st_reparse_tag", None) == getattr(right, "st_reparse_tag", None)
+    )
+
+
+def _directory_entries_match(
+    left: list[tuple[str, os.stat_result]],
+    right: list[tuple[str, os.stat_result]],
+) -> bool:
+    def stable_fields(record: tuple[str, os.stat_result]) -> tuple[Any, ...]:
+        name, info = record
+        return (
+            name,
+            info.st_dev,
+            info.st_ino,
+            stat.S_IFMT(info.st_mode),
+            info.st_size,
+            info.st_nlink,
+            info.st_mtime_ns,
+            _is_reparse_point(info),
+            getattr(info, "st_reparse_tag", None),
+        )
+
+    return sorted(map(stable_fields, left)) == sorted(map(stable_fields, right))
+
+
 def _walk_without_links(root: Path) -> list[tuple[Path, os.stat_result]]:
     root_info = root.lstat()
     if not stat.S_ISDIR(root_info.st_mode) or _is_reparse_point(root_info):
@@ -105,11 +144,7 @@ def _walk_without_links(root: Path) -> list[tuple[Path, os.stat_result]]:
             visible_before = directory.lstat()
         except OSError as exc:
             raise SnapshotLimitError("filesystem snapshot directory changed before traversal") from exc
-        if not _same_file_snapshot(
-            expected_directory,
-            visible_before,
-            compare_change_time=os.name != "nt",
-        ):
+        if not _same_directory_snapshot(expected_directory, visible_before):
             raise SnapshotLimitError("filesystem snapshot directory changed before traversal")
         remaining = MAX_SNAPSHOT_ENTRIES - len(paths)
         try:
@@ -118,12 +153,10 @@ def _walk_without_links(root: Path) -> list[tuple[Path, os.stat_result]]:
             raise SnapshotLimitError("filesystem snapshot directory could not be pinned") from exc
         entries: list[tuple[str, os.stat_result]] = []
         try:
+            if not _pinned_directory_unchanged(scan_target, directory):
+                raise SnapshotLimitError("filesystem snapshot directory changed before traversal")
             pinned = os.fstat(scan_target) if isinstance(scan_target, int) else directory.lstat()
-            if not _same_file_snapshot(
-                expected_directory,
-                pinned,
-                compare_change_time=os.name != "nt",
-            ):
+            if not _same_directory_snapshot(expected_directory, pinned):
                 raise SnapshotLimitError("filesystem snapshot directory changed before traversal")
             with os.scandir(scan_target) as iterator:
                 for entry in islice(iterator, remaining + 1):
@@ -134,19 +167,38 @@ def _walk_without_links(root: Path) -> list[tuple[Path, os.stat_result]]:
                             "filesystem snapshot entry changed during traversal"
                         ) from exc
                     entries.append((entry.name, entry_info))
+            if os.name == "nt" and len(entries) <= remaining:
+                repeated_entries: list[tuple[str, os.stat_result]] = []
+                with os.scandir(scan_target) as iterator:
+                    for entry in islice(iterator, remaining + 1):
+                        try:
+                            entry_info = entry.stat(follow_symlinks=False)
+                        except OSError as exc:
+                            raise SnapshotLimitError(
+                                "filesystem snapshot entry changed during traversal"
+                            ) from exc
+                        repeated_entries.append((entry.name, entry_info))
+                if len(repeated_entries) > remaining or not _directory_entries_match(
+                    entries,
+                    repeated_entries,
+                ):
+                    raise SnapshotLimitError("filesystem snapshot directory changed during traversal")
             try:
                 visible_after = directory.lstat()
                 pinned_after = os.fstat(scan_target) if isinstance(scan_target, int) else visible_after
             except OSError as exc:
                 raise SnapshotLimitError("filesystem snapshot directory changed during traversal") from exc
-            if not _same_file_snapshot(
-                expected_directory,
-                visible_after,
-                compare_change_time=os.name != "nt",
-            ) or not _same_file_snapshot(pinned, pinned_after):
+            if (
+                not _pinned_directory_unchanged(scan_target, directory)
+                or not _same_directory_snapshot(expected_directory, visible_after)
+                or not _same_directory_snapshot(pinned, pinned_after)
+            ):
                 raise SnapshotLimitError("filesystem snapshot directory changed during traversal")
         finally:
-            close_pinned()
+            try:
+                close_pinned()
+            except OSError as exc:
+                raise SnapshotLimitError("filesystem snapshot directory pin could not be closed") from exc
         if len(entries) > remaining:
             raise SnapshotLimitError(
                 f"filesystem snapshot exceeds the {MAX_SNAPSHOT_ENTRIES} entry safety limit"
@@ -174,7 +226,11 @@ def _open_verified_entry(
     flags |= getattr(os, "O_NOFOLLOW", 0)
     if directory:
         flags |= getattr(os, "O_DIRECTORY", 0)
-    descriptor = os.open(path, flags)
+    descriptor = (
+        _open_windows_file_descriptor(path, expected)
+        if os.name == "nt" and not directory
+        else os.open(path, flags)
+    )
     try:
         opened = os.fstat(descriptor)
         expected_kind = stat.S_ISDIR if directory else stat.S_ISREG
@@ -189,13 +245,9 @@ def _open_verified_entry(
         descriptor_path = _descriptor_resolved_path(descriptor)
         if descriptor_path is None:
             raise SnapshotLimitError("filesystem snapshot entry location could not be verified")
-        actual = Path(os.path.abspath(os.fspath(descriptor_path)))
-        lexical = Path(os.path.abspath(os.fspath(path)))
-        try:
-            actual.relative_to(Path(os.path.abspath(os.fspath(root))))
-        except ValueError as exc:
-            raise SnapshotLimitError("filesystem snapshot entry escaped its root") from exc
-        if os.path.normcase(os.fspath(actual)) != os.path.normcase(os.fspath(lexical)):
+        if not _existing_path_within_root(descriptor_path, root):
+            raise SnapshotLimitError("filesystem snapshot entry escaped its root")
+        if not _same_existing_path(descriptor_path, path):
             raise SnapshotLimitError("filesystem snapshot entry path changed while opening")
         return descriptor
     except Exception:
@@ -367,11 +419,12 @@ def _snapshot_entry(
         value = path.lstat()
     except OSError as exc:
         raise SnapshotLimitError("filesystem snapshot entry changed before capture") from exc
-    if not _same_file_snapshot(
-        expected,
-        value,
-        compare_change_time=os.name != "nt",
-    ):
+    unchanged_before = (
+        _same_directory_snapshot(expected, value)
+        if stat.S_ISDIR(expected.st_mode)
+        else _same_file_snapshot(expected, value, compare_change_time=os.name != "nt")
+    )
+    if not unchanged_before:
         raise SnapshotLimitError("filesystem snapshot entry changed before capture")
     kind = _kind(value)
     relative = "." if path == root else path.relative_to(root).as_posix()
@@ -436,7 +489,12 @@ def _snapshot_entry(
         final = path.lstat()
     except OSError as exc:
         raise SnapshotLimitError("filesystem snapshot entry changed during capture") from exc
-    if not _same_file_snapshot(value, final):
+    unchanged = (
+        _same_directory_snapshot(value, final)
+        if kind == "directory"
+        else _same_file_snapshot(value, final, compare_change_time=os.name != "nt")
+    )
+    if not unchanged:
         raise SnapshotLimitError("filesystem snapshot entry changed during capture")
     return (relative, metadata), xattr_bytes
 

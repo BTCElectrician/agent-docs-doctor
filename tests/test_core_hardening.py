@@ -241,11 +241,15 @@ def test_bounded_input_rejects_in_place_change_during_read() -> None:
                 path.write_bytes(b"B" * 70_000)
             return chunk
 
+        expected_error = OSError if os.name == "nt" else ValueError
+        expected_message = "unable to read input" if os.name == "nt" else "changed while it was being read"
         with (
             patch.object(core.os, "read", side_effect=racing_read),
-            pytest.raises(ValueError, match="changed while it was being read"),
+            pytest.raises(expected_error, match=expected_message),
         ):
             core.read_bounded_input(path, core.MAX_READ_BYTES)
+        if os.name == "nt":
+            assert path.read_bytes() == b"A" * 70_000
 
 
 def test_bounded_input_fails_before_read_when_descriptor_location_is_unavailable() -> None:
@@ -353,19 +357,32 @@ def test_walk_fails_closed_when_pinned_directory_location_is_unavailable() -> No
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows native directory pinning test")
-def test_windows_native_directory_pin_denies_rename_until_typed_close() -> None:
+def test_windows_native_directory_pin_detects_replacement_and_closes() -> None:
     with tempfile.TemporaryDirectory() as value:
         root = Path(value).resolve()
         renamed = root.with_name(f"{root.name}-renamed")
         scan_target, close_pinned = core._open_pinned_directory(root, root)
+        renamed_while_open = False
         try:
-            assert scan_target == root
-            with pytest.raises(OSError):
+            assert not isinstance(scan_target, int)
+            assert os.path.samefile(os.fspath(scan_target), root)
+            assert core._pinned_directory_unchanged(scan_target, root)
+            try:
                 root.rename(renamed)
+            except OSError:
+                pass
+            else:
+                renamed_while_open = True
+                root.mkdir()
+                assert not core._pinned_directory_unchanged(scan_target, root)
         finally:
             close_pinned()
-        root.rename(renamed)
-        renamed.rename(root)
+        if renamed_while_open:
+            root.rmdir()
+            renamed.rename(root)
+        else:
+            root.rename(renamed)
+            renamed.rename(root)
 
 
 def test_nonprinting_unicode_path_is_hash_only_in_json_and_text() -> None:
