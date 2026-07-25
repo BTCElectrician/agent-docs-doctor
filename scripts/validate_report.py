@@ -3,13 +3,19 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from doctorlib import validate_audit  # noqa: E402
+from agent_docs_doctor.core import validate_audit  # noqa: E402
+from agent_docs_doctor.report_validation import (  # noqa: E402
+    ReportInputError,
+    decode_report,
+    read_report_file,
+    read_report_stdin,
+)
 
 USAGE = "usage: validate_report.py <report.json|->"
 
@@ -26,9 +32,9 @@ def main(argv: list[str] | None = None) -> int:
         print(USAGE, file=sys.stderr)
         return 2
     try:
-        raw = sys.stdin.read() if args[0] == "-" else Path(args[0]).read_text(encoding="utf-8")
-        errors = validate_audit(json.JSONDecoder().decode(raw))
-    except (OSError, json.JSONDecodeError) as exc:
+        raw = read_report_stdin(sys.stdin.buffer) if args[0] == "-" else read_report_file(Path(args[0]))
+        errors = validate_audit(decode_report(raw))
+    except (OSError, ReportInputError, RecursionError, MemoryError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if errors:

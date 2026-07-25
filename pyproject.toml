@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77.0.3"]
+requires = ["setuptools==77.0.3", "wheel==0.45.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-docs-doctor"
-version = "0.2.0"
+version = "0.3.0"
 description = "Evidence-first audits for agent-facing repository documentation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,8 +36,12 @@ agent-docs-doctor = "agent_docs_doctor.cli:main"
 [project.optional-dependencies]
 dev = [
   "build>=1.2,<2",
+  "jsonschema>=4.23,<5",
+  "pytest>=8.3,<9",
   "pyright>=1.1,<2",
   "ruff>=0.12,<1",
+  "setuptools==77.0.3",
+  "wheel==0.45.1",
 ]
 
 [tool.setuptools]

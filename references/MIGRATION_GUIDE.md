@@ -3,6 +3,11 @@
 Use only after the user has reviewed an exact change preview and explicitly authorized applying it.
 Requesting `preview` in the decision review does not authorize writes.
 
+This guide governs approved edits to repository documentation. The built-in `install-skill` and
+`uninstall-skill` commands are a different user-level mutation path: they require their own plan
+preview and `--apply PLAN_TOKEN_FROM_PREVIEW`. An installer fingerprint never authorizes repository edits,
+and approval of this migration never authorizes skill installation or uninstall.
+
 ## Preconditions
 
 - Freeze the incumbent in version control or an immutable review artifact.
@@ -11,6 +16,9 @@ Requesting `preview` in the decision review does not authorize writes.
 - Confirm repository root, branch, dirty state, and deployment behavior.
 - Identify every preservation-register item and owner decision.
 - Keep cross-repository edits out of scope unless separately approved.
+- Require a complete audit for every conclusion that depends on absence. If coverage is partial,
+  list the custom-ignored, unreadable, non-regular, concurrently changed, or resource-limited scope
+  and resolve it or obtain an owner decision before migration.
 
 ## Migration sequence
 
@@ -23,6 +31,19 @@ Requesting `preview` in the decision review does not authorize writes.
 7. Inspect the diff for lost safeguards and unrelated changes.
 8. Execute the frozen incumbent-versus-challenger evaluation before adoption claims.
 9. Document rollback and residual risk.
+
+## Installer backup recovery
+
+Repository migration rollback and Agent Docs Doctor's managed-skill backups are separate. The
+installer never automatically restores or deletes a backup.
+
+For a managed-skill recovery, use only the `Reversible backup` path emitted by the applied plan.
+Verify the backup manifest, client, version, file allowlist, and hashes. Confirm that the exact
+user-level destination is absent and that no path component is a symlink, junction, or reparse
+point. Then use a same-filesystem move that fails if the destination appears concurrently; never
+use an overwrite-capable copy or move. Preview `install-skill --client CLIENT`; an
+`already-installed` result confirms the manifest. Stop if the destination exists or any identity
+differs. Never replace an unmanaged destination to complete a restore.
 
 ## Stop conditions
 

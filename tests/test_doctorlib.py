@@ -26,6 +26,7 @@ from doctorlib import (  # noqa: E402
     validate_audit,
 )
 
+import agent_docs_doctor.installer as installer  # noqa: E402
 from agent_docs_doctor.installer import (  # noqa: E402
     MANIFEST_NAME,
     apply_install,
@@ -48,6 +49,18 @@ class DoctorLibTests(unittest.TestCase):
             link.symlink_to(target, target_is_directory=target_is_directory)
         except OSError as exc:
             self.skipTest(f"symlink creation unavailable: {exc.__class__.__name__}")
+
+    def apply_bound_install(self, plan: Any) -> Any:
+        if not installer._secure_mutation_supported():
+            self.skipTest("secure descriptor-relative installer apply is unavailable")
+        self.assertIsInstance(plan.plan_token, str)
+        return apply_install(plan, plan.plan_token)
+
+    def apply_bound_uninstall(self, plan: Any) -> Any:
+        if not installer._secure_mutation_supported():
+            self.skipTest("secure descriptor-relative installer apply is unavailable")
+        self.assertIsInstance(plan.plan_token, str)
+        return apply_uninstall(plan, plan.plan_token)
 
     def test_empty_repository(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -161,15 +174,23 @@ class DoctorLibTests(unittest.TestCase):
             paths = [item["path"] for item in build_inventory(root)["files"]]
         self.assertEqual(paths, ["docs/STATUS.md"])
 
-    def test_nested_gitignore_is_control_input_inside_traversed_directory(self) -> None:
+    def test_ignored_nested_gitignore_fail_closes_its_directory_without_reading_it(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
             self.write(root, ".gitignore", "docs/.gitignore\n")
             self.write(root, "docs/.gitignore", "private/\n")
             self.write(root, "docs/private/AGENTS.md", "# Private\n")
             self.write(root, "docs/STATUS.md", "# Public\n")
-            paths = [item["path"] for item in build_inventory(root)["files"]]
-        self.assertEqual(paths, ["docs/STATUS.md"])
+            inventory = build_inventory(root)
+        self.assertEqual(inventory["files"], [])
+        self.assertEqual(inventory["coverage"]["status"], "partial")
+        self.assertIn(
+            {
+                "path": "docs/.gitignore",
+                "reason": "ignored discovery control not inspected",
+            },
+            inventory["skipped"],
+        )
 
     def test_slash_pattern_star_does_not_cross_directories(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -385,7 +406,7 @@ class DoctorLibTests(unittest.TestCase):
         self.assertIn(
             {
                 "path": "linked",
-                "reason": "symlink or reparse directory not followed",
+                "reason": "symlink or reparse filesystem entry not followed",
             },
             result["skipped"],
         )
@@ -518,11 +539,15 @@ class DoctorLibTests(unittest.TestCase):
             audit = build_audit(root)
         broken = [item for item in audit["findings"] if item["category"] == "broken-reference"]
         references = audit["inventory"]["files"][0]["references"]
-        outside = next(item for item in references if item["target"] == "../outside.md")
+        outside = next(item for item in references if item["target"] == "<out-of-root-path>")
         self.assertEqual(len(broken), 1)
         self.assertEqual(broken[0]["evidence"]["target"], "docs/missing.md")
         self.assertFalse(outside["inside_root"])
         self.assertIsNone(outside["exists"])
+        self.assertEqual(
+            outside["target_sha256"],
+            hashlib.sha256(b"../outside.md").hexdigest(),
+        )
         self.assertFalse(any(item["target"] == "https://example.com" for item in references))
 
     def test_claude_import_inventories_non_candidate_authority(self) -> None:
@@ -606,8 +631,9 @@ class DoctorLibTests(unittest.TestCase):
             by_target["docs/private/POLICY.md"]["resolution"],
             "excluded-ignored",
         )
-        self.assertEqual(by_target[".env"]["resolution"], "excluded-secret")
-        self.assertEqual(by_target["../outside.md"]["resolution"], "out-of-scope")
+        self.assertEqual(by_target["<secret-like-path>"]["resolution"], "excluded-secret")
+        self.assertEqual(len(by_target["<secret-like-path>"]["target_sha256"]), 64)
+        self.assertEqual(by_target["<out-of-root-path>"]["resolution"], "out-of-scope")
         self.assertEqual(by_target["missing.md"]["resolution"], "missing")
         self.assertEqual([item["path"] for item in inventory["files"]], ["CLAUDE.md"])
 
@@ -916,6 +942,15 @@ class DoctorLibTests(unittest.TestCase):
         ]
         self.assertIn("findings[0] has invalid severity", validate_audit(report))
 
+    def test_standalone_inventory_uses_the_finalized_v2_coverage_shape(self) -> None:
+        inventory = build_inventory(ROOT / "fixtures" / "healthy-repo")
+        report = build_audit(ROOT / "fixtures" / "healthy-repo")
+        report["inventory"] = inventory
+
+        self.assertIn("finding_records", inventory["coverage"])
+        self.assertEqual(inventory["coverage"]["finding_records"], len(report["findings"]))
+        self.assertEqual(validate_audit(report), [])
+
     def test_validator_checks_nested_v2_report_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -968,11 +1003,11 @@ class DoctorLibTests(unittest.TestCase):
             ),
             (
                 lambda item: item["engine"]["configuration"].__setitem__("future_limit", "many"),
-                "engine.configuration.future_limit must be a positive integer",
+                "engine.configuration contains an additive value that is not a positive integer",
             ),
             (
                 lambda item: item["inventory"]["coverage"]["limits"].__setitem__("future_limit", "many"),
-                "inventory.coverage.limits.future_limit must be a positive integer",
+                "inventory.coverage.limits contains an additive value that is not a positive integer",
             ),
             (
                 lambda item: item["engine"]["configuration"].__setitem__(1, 1),
@@ -981,6 +1016,39 @@ class DoctorLibTests(unittest.TestCase):
             (
                 lambda item: item["inventory"]["coverage"]["limits"].__setitem__(1, 1),
                 "inventory.coverage.limits keys must be strings",
+            ),
+            (
+                lambda item: item["inventory"]["coverage"].__setitem__("candidate_files", 999),
+                "inventory.coverage.candidate_files must equal the emitted file count",
+            ),
+            (
+                lambda item: item["inventory"]["coverage"].__setitem__("reference_records", 999),
+                "inventory.coverage.reference_records must equal the emitted reference count",
+            ),
+            (
+                lambda item: item["inventory"]["coverage"].__setitem__("finding_records", 999),
+                "inventory.coverage.finding_records must equal the emitted finding count",
+            ),
+            (
+                lambda item: item["engine"]["configuration"].__setitem__("max_read_bytes", 1),
+                (
+                    "engine.configuration.max_read_bytes must match "
+                    "inventory.coverage.limits.max_file_read_bytes"
+                ),
+            ),
+            (
+                lambda item: (
+                    item["engine"]["configuration"].__setitem__("max_candidate_files", 1),
+                    item["inventory"]["coverage"]["limits"].__setitem__("max_candidate_files", 1),
+                ),
+                "inventory.files exceeds its declared max_candidate_files",
+            ),
+            (
+                lambda item: (
+                    item["engine"]["configuration"].__setitem__("max_total_read_bytes", 1),
+                    item["inventory"]["coverage"]["limits"].__setitem__("max_total_read_bytes", 1),
+                ),
+                "inventory.coverage.read_bytes exceeds its declared max_total_read_bytes",
             ),
         )
         for mutate, expected in cases:
@@ -1183,7 +1251,7 @@ class DoctorLibTests(unittest.TestCase):
         self.assertIn("install-skill", help_result.stdout)
         self.assertIn("without changing it", help_result.stdout)
         self.assertEqual(version_result.returncode, 0, version_result.stderr)
-        self.assertIn("agent-docs-doctor 0.2.0", version_result.stdout)
+        self.assertIn("agent-docs-doctor 0.3.0", version_result.stdout)
         self.assertEqual(doctor_result.returncode, 0, doctor_result.stderr)
         self.assertIn("No repository files were changed.", doctor_result.stdout)
         self.assertEqual(text_result.returncode, 0, text_result.stderr)
@@ -1205,7 +1273,7 @@ class DoctorLibTests(unittest.TestCase):
             self.assertEqual(preview.state, "ready")
             self.assertFalse(preview.target.exists())
 
-            installed = apply_install(preview)
+            installed = self.apply_bound_install(preview)
             target = target_for("codex", home)
             self.assertEqual(installed.state, "applied")
             self.assertTrue((target / "SKILL.md").is_file())
@@ -1214,7 +1282,7 @@ class DoctorLibTests(unittest.TestCase):
             uninstall_preview = plan_uninstall("codex", home=home)
             self.assertEqual(uninstall_preview.state, "ready")
             self.assertTrue(target.exists())
-            removed = apply_uninstall(uninstall_preview)
+            removed = self.apply_bound_uninstall(uninstall_preview)
             self.assertEqual(removed.state, "applied")
             self.assertFalse(target.exists())
             assert removed.backup is not None
@@ -1253,7 +1321,7 @@ class DoctorLibTests(unittest.TestCase):
             target.parent.mkdir(parents=True)
             self.symlink(target, home / "appeared-after-preview", target_is_directory=True)
             with self.assertRaisesRegex(OSError, "changed after preview"):
-                apply_install(preview)
+                self.apply_bound_install(preview)
             self.assertTrue(target.is_symlink())
 
     def test_skill_installer_requires_valid_ownership_manifest_and_matching_files(self) -> None:
@@ -1271,7 +1339,7 @@ class DoctorLibTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as value:
             home = Path(value)
-            installed = apply_install(plan_install("claude", home=home))
+            installed = self.apply_bound_install(plan_install("claude", home=home))
             (installed.target / "SKILL.md").write_text("# Locally changed\n", encoding="utf-8")
             changed = plan_install("claude", home=home)
             self.assertEqual(changed.state, "update-required")
@@ -1279,7 +1347,7 @@ class DoctorLibTests(unittest.TestCase):
     def test_skill_installer_rejects_unsafe_manifest_version(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             home = Path(value)
-            installed = apply_install(plan_install("cursor", home=home))
+            installed = self.apply_bound_install(plan_install("cursor", home=home))
             manifest_path = installed.target / MANIFEST_NAME
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["version"] = r"x\..\..\..\Documents\escaped"
@@ -1299,7 +1367,7 @@ class DoctorLibTests(unittest.TestCase):
     def test_skill_update_is_atomic_and_preserves_previous_version(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             home = Path(value)
-            installed = apply_install(plan_install("cursor", home=home))
+            installed = self.apply_bound_install(plan_install("cursor", home=home))
             target = installed.target
             manifest = json.loads((target / MANIFEST_NAME).read_text(encoding="utf-8"))
             manifest["version"] = "0.1.0"
@@ -1312,17 +1380,17 @@ class DoctorLibTests(unittest.TestCase):
             self.assertEqual(blocked.state, "update-required")
             update = plan_install("cursor", home=home, update=True)
             self.assertEqual(update.state, "ready")
-            applied = apply_install(update)
+            applied = self.apply_bound_install(update)
             self.assertEqual(applied.state, "applied")
             assert applied.backup is not None
             self.assertTrue((applied.backup / MANIFEST_NAME).is_file())
             current = json.loads((target / MANIFEST_NAME).read_text(encoding="utf-8"))
-            self.assertEqual(current["version"], "0.2.0")
+            self.assertEqual(current["version"], "0.3.0")
 
     def test_skill_apply_refuses_state_changed_after_preview(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             home = Path(value)
-            installed = apply_install(plan_install("codex", home=home))
+            installed = self.apply_bound_install(plan_install("codex", home=home))
             uninstall = plan_uninstall("codex", home=home)
             manifest_path = installed.target / MANIFEST_NAME
             manifest_path.write_text(
@@ -1330,7 +1398,7 @@ class DoctorLibTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(OSError, "changed after preview"):
-                apply_uninstall(uninstall)
+                self.apply_bound_uninstall(uninstall)
             self.assertTrue(installed.target.is_dir())
 
     def test_cache_free_syntax_checker(self) -> None:
@@ -1443,7 +1511,7 @@ class DoctorLibTests(unittest.TestCase):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('agent-docs-doctor = "agent_docs_doctor.cli:main"', pyproject)
         self.assertIn('"share/agent-docs-doctor/skill"', pyproject)
-        self.assertIn('requires = ["setuptools>=77.0.3"]', pyproject)
+        self.assertIn('requires = ["setuptools==77.0.3", "wheel==0.45.1"]', pyproject)
 
 
 if __name__ == "__main__":

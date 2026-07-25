@@ -27,18 +27,21 @@
     },
     "findings": {
       "type": "array",
+      "maxItems": 2000,
       "items": {
         "$ref": "#/$defs/finding"
       }
     },
     "judgment_queue": {
       "type": "array",
+      "maxItems": 10000,
       "items": {
         "type": "string"
       }
     },
     "limitations": {
       "type": "array",
+      "maxItems": 10000,
       "items": {
         "type": "string"
       }
@@ -74,12 +77,27 @@
         },
         "configuration": {
           "type": "object",
+          "maxProperties": 10000,
           "required": [
             "max_read_bytes",
             "max_ignore_rules",
+            "max_ignore_pattern_chars",
+            "max_ignore_evaluations",
             "max_candidate_files",
             "max_total_read_bytes",
-            "max_import_depth"
+            "max_import_depth",
+            "max_walk_entries",
+            "max_references",
+            "max_references_per_file",
+            "max_paragraph_blocks",
+            "max_frontmatter_chars",
+            "max_frontmatter_fields",
+            "max_findings",
+            "max_finding_locations",
+            "max_skipped_records",
+            "max_warning_records",
+            "max_display_chars",
+            "max_report_bytes"
           ],
           "additionalProperties": {
             "$ref": "#/$defs/positiveInteger"
@@ -93,6 +111,11 @@
         "status",
         "candidate_files",
         "read_bytes",
+        "traversed_entries",
+        "reference_records",
+        "paragraph_blocks",
+        "finding_records",
+        "partial_reasons",
         "limits"
       ],
       "properties": {
@@ -108,19 +131,89 @@
         "read_bytes": {
           "$ref": "#/$defs/nonNegativeInteger"
         },
+        "traversed_entries": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "reference_records": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "paragraph_blocks": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "finding_records": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "partial_reasons": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
         "limits": {
           "type": "object",
+          "maxProperties": 10000,
           "required": [
             "max_candidate_files",
+            "max_ignore_rules",
+            "max_ignore_pattern_chars",
+            "max_ignore_evaluations",
             "max_total_read_bytes",
             "max_file_read_bytes",
-            "max_import_depth"
+            "max_import_depth",
+            "max_walk_entries",
+            "max_references",
+            "max_references_per_file",
+            "max_paragraph_blocks",
+            "max_frontmatter_chars",
+            "max_frontmatter_fields",
+            "max_findings",
+            "max_finding_locations",
+            "max_skipped_records",
+            "max_warning_records",
+            "max_display_chars",
+            "max_report_bytes"
           ],
           "additionalProperties": {
             "$ref": "#/$defs/positiveInteger"
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "partial_reasons": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "partial"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "partial_reasons": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
     },
     "reference": {
       "type": "object",
@@ -238,10 +331,50 @@
           ]
         },
         "metadata": {
-          "type": "object"
+          "type": "object",
+          "properties": {
+            "alwaysApply": {
+              "type": "boolean"
+            },
+            "retired": {
+              "type": "boolean"
+            },
+            "status": {
+              "enum": [
+                "active",
+                "current",
+                "retired",
+                "deprecated",
+                "archived",
+                "superseded"
+              ]
+            },
+            "role": {
+              "enum": [
+                "adapter",
+                "authority",
+                "configuration",
+                "current-state",
+                "history",
+                "procedure",
+                "reference"
+              ]
+            },
+            "has_description": {
+              "type": "boolean"
+            },
+            "has_globs": {
+              "type": "boolean"
+            },
+            "has_paths": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         },
         "references": {
           "type": "array",
+          "maxItems": 500,
           "items": {
             "$ref": "#/$defs/reference"
           }
@@ -257,6 +390,7 @@
         },
         "platforms": {
           "type": "array",
+          "maxItems": 20000,
           "items": {
             "type": "string"
           }
@@ -309,6 +443,7 @@
         },
         "occurrences": {
           "type": "array",
+          "maxItems": 5000,
           "items": {
             "$ref": "#/$defs/occurrence"
           },
@@ -369,24 +504,28 @@
         },
         "files": {
           "type": "array",
+          "maxItems": 10000,
           "items": {
             "$ref": "#/$defs/file"
           }
         },
         "exact_overlap_groups": {
           "type": "array",
+          "maxItems": 5000,
           "items": {
             "$ref": "#/$defs/overlap"
           }
         },
         "skipped": {
           "type": "array",
+          "maxItems": 5000,
           "items": {
             "$ref": "#/$defs/skipped"
           }
         },
         "warnings": {
           "type": "array",
+          "maxItems": 5000,
           "items": {
             "$ref": "#/$defs/warning"
           }
@@ -450,6 +589,7 @@
         },
         "locations": {
           "type": "array",
+          "maxItems": 500,
           "items": {
             "$ref": "#/$defs/location"
           }
