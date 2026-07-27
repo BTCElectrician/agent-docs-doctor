@@ -1,14 +1,15 @@
 # Human report contract
 
-Produce a plain-language decision review backed by the deterministic JSON ledger. The user should
-be able to respond without understanding the engine or agent-document architecture.
+Produce a plain-language diagnosis backed by the JSON report. The user should be able to understand
+what was found, why it matters, what to fix, what to leave alone, and that nothing has changed
+without understanding the engine or agent-document architecture.
 
 ## Default response
 
 Start with:
 
 ```text
-Agent Docs Doctor found N items worth reviewing.
+We found N things worth reviewing.
 Nothing was changed.
 ```
 
@@ -18,16 +19,17 @@ short summary.
 Otherwise show at most seven items, ordered by safety and likely impact:
 
 ```markdown
-### D1 — Old plan is still being referenced
+### 1. An instruction points to a file that is not there.
 
 `CURRENT_PLAN.md` and `AGENTS.md`
 
-**What I found:** The plan says it is retired, but agents are still told to read it.
-**Recommendation:** Fix the reference, then archive the old plan.
-**Safe default:** Keep both files unchanged until an owner confirms the current plan.
+**Where:** `AGENTS.md`
+**Why it matters:** Someone following the instruction cannot reach the intended guidance.
+**Recommendation:** Fix the link after confirming where it should lead.
+**If you are unsure:** Leave the files unchanged until the intended destination is confirmed.
 ```
 
-Use these user-facing recommendation verbs:
+Use these user-facing recommendations:
 
 - **Keep** — leave it unchanged.
 - **Fix** — repair a link, label, scope, or loading problem.
@@ -36,15 +38,15 @@ Use these user-facing recommendation verbs:
 - **Archive later** — move history only after references and preservation needs are resolved.
 - **Ask an owner** — do not guess when history or risk is unknown.
 
-End with:
+End with one easy approval question:
 
 ```text
-Reply with: D1 preview, D2 keep, D3 later — or say “show evidence.”
-Nothing will be changed until you review a separate change preview and explicitly approve it.
+Nothing has changed yet. Do you want me to prepare a no-change preview for the recommended fixes?
+Say “show details” to see the technical evidence. Nothing will be changed until you review a
+separate change preview and explicitly approve it.
 ```
 
-Use exactly one choice per decision ID in the example reply. Never show `D2 keep, D2 later` as if
-both should be sent.
+Do not require the user to choose internal IDs or understand report categories to ask for help.
 
 If more than seven decisions exist, state the total and the visible range:
 

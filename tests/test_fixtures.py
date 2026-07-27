@@ -9,6 +9,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from doctorlib import build_audit  # noqa: E402
 
+from agent_docs_doctor.presentation import audit_text  # noqa: E402
+
 
 class FixtureTests(unittest.TestCase):
     def audit(self, name: str):
@@ -23,6 +25,7 @@ class FixtureTests(unittest.TestCase):
                 "competing-status",
                 "conflicting-rules",
                 "healthy-repo",
+                "human-report",
                 "intentional-duplication",
                 "lightweight-workspace",
                 "stale-history",
@@ -47,6 +50,23 @@ class FixtureTests(unittest.TestCase):
     def test_lightweight_workspace_is_discovered_without_engineering_assumptions(self) -> None:
         files = self.audit("lightweight-workspace")["inventory"]["files"]
         self.assertEqual([item["path"] for item in files], ["AGENTS.md", "STATUS.md"])
+
+    def test_human_report_fixture_uses_plain_language_and_keeps_details_optional(self) -> None:
+        rendered = audit_text(self.audit("human-report"))
+        self.assertIn("We found 4 things worth reviewing:", rendered)
+        self.assertIn("An instruction points to a file that is not there.", rendered)
+        self.assertIn("Both documents look like they describe the current state.", rendered)
+        self.assertIn("The same instruction appears in two documents.", rendered)
+        self.assertIn("The same safety rule appears in two documents.", rendered)
+        self.assertIn(
+            "Leave it alone unless an owner confirms that both copies cover the same scope.",
+            rendered,
+        )
+        self.assertIn("Nothing has changed yet. Do you want me to prepare a no-change preview", rendered)
+        self.assertIn("Say “show details” to see the technical evidence.", rendered)
+        self.assertNotIn("deterministic signal", rendered)
+        self.assertNotIn("judgment queue", rendered)
+        self.assertNotIn("E1", rendered)
 
 
 if __name__ == "__main__":

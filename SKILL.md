@@ -5,7 +5,7 @@ description: Audit and improve agent-facing repository documentation across Code
 
 # Agent Docs Doctor
 
-Audit the instruction system around a repository, not just one file. Build an evidence ledger first, apply labeled judgment second, and never equate shorter documentation with safer documentation.
+Audit the instruction system around a repository, not just one file. First explain what was found in ordinary language, then keep the supporting technical record available when requested. Never equate shorter documentation with safer documentation.
 
 ## Operating contract
 
@@ -17,8 +17,8 @@ Audit the instruction system around a repository, not just one file. Build an ev
   or that an installer plan authorizes repository edits.
 - Distinguish platform-verified loading behavior from filename-based inference. Read [references/PLATFORM_BEHAVIOR.md](references/PLATFORM_BEHAVIOR.md) when platform loading or precedence affects a finding.
 - Preserve production, deployment, destructive-operation, privacy, authentication, financial, legal, health, data-integrity, ownership, rollback, and incident-derived safeguards.
-- Label deterministic evidence, model judgment, uncertainty, and user decisions separately.
-- Make the default human response a short decision review. Keep technical detail available on request instead of leading with it.
+- Keep deterministic evidence, model judgment, uncertainty, and user decisions separate in the technical record.
+- Make the default response a short, plain-language diagnosis. Keep technical detail available only on request instead of leading with it.
 - Do not assign a scientific-sounding health score. Use the evidence and severity rubric in [references/AUDIT_RUBRIC.md](references/AUDIT_RUBRIC.md).
 
 ## Workflow
@@ -27,7 +27,7 @@ Audit the instruction system around a repository, not just one file. Build an ev
 
 Confirm the repository root and requested output. Note any user-declared private paths or additional exclusions. Do not broaden the audit to sibling repositories without permission.
 
-### 2. Produce the deterministic ledger
+### 2. Gather the facts
 
 Run:
 
@@ -42,7 +42,7 @@ scanner. Keep any explicitly requested saved report outside the audited reposito
 chooses a path inside it.
 
 Review skipped files, warnings, discovered surfaces, exact-overlap groups, local references, archive
-classification, and deterministic findings. The ledger omits overlap paragraph bodies, emits only
+classification, and findings. The technical record omits overlap paragraph bodies, emits only
 a fixed privacy-safe frontmatter summary, and masks absolute and out-of-root reference targets.
 Secret-like names and multiply-linked candidate files are not opened.
 
@@ -119,29 +119,29 @@ When a redesign is useful, propose a challenger tree and an incumbent-to-challen
 
 Read [references/EVALUATION_PROTOCOL.md](references/EVALUATION_PROTOCOL.md) before recommending adoption. Freeze representative tasks, the incumbent, the challenger, model settings, and judge rubric. Include safety adherence, correctness, unnecessary reads or approvals, verification quality, latency, and token use when observable. Do not claim the challenger is better before the evaluation supports it.
 
-### 7. Give the simple decision review
+### 7. Give the simple diagnosis
 
 Read [references/REPORT_SCHEMA.md](references/REPORT_SCHEMA.md). Make its simple review the default
-response. Start with the number of items worth reviewing and the sentence **Nothing was changed.**
+response. Start with what was found and the sentence **Nothing was changed.**
 
-Show no more than seven decision items at once. Give each one a stable ID such as `D1`, a plain
-title, the affected path or scope, one short explanation, one recommendation, and a safe default.
-Lead with a critical safety or authority item when one exists. Do not lead with the architecture map,
-raw JSON, evidence classes, or terms such as incumbent and challenger.
+Show no more than seven items at once. Give each one a plain title, where it was found, why it
+matters, one recommendation, and the safe thing to do when intent is unknown. Lead with a critical
+safety or authority item when one exists. Do not lead with an architecture map, raw JSON, evidence
+classes, decision IDs, or terms such as incumbent and challenger.
 
 If more than seven decisions exist, say how many total decisions exist and that the current page
 shows `D1` through `D7`. End with `Reply next to see D8 onward.` When the user replies `next`, show
 the next unseen decisions in the same audit session without renumbering, repeating, or silently
 changing earlier recommendations.
 
-End with one easy reply format:
+End with one easy approval question:
 
 ```text
-Reply with: D1 preview, D2 keep, D3 later — or say “show evidence.”
+Nothing has changed yet. Do you want me to prepare a no-change preview for the recommended fixes?
 ```
 
-Show one choice per decision ID; never present conflicting choices for the same ID in the example
-reply. Add `or “next”` only when unseen decisions remain.
+Offer `show details` when technical evidence would help. Add `or “next”` only when unseen items
+remain.
 
 `preview` asks for an exact no-write change preview. `keep` rejects the recommendation and
 preserves the current file. `later` defers it. `show evidence` expands the technical basis.

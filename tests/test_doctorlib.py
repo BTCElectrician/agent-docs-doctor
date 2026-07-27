@@ -885,6 +885,8 @@ class DoctorLibTests(unittest.TestCase):
                         str(SCRIPTS / "agent_docs_doctor.py"),
                         "audit",
                         str(root),
+                        "--format",
+                        "json",
                         "--pretty",
                     ],
                     cwd=ROOT,
@@ -1218,8 +1220,24 @@ class DoctorLibTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(json.JSONDecoder().decode(completed.stdout)["mode"], "read-only")
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("Nothing was changed.", completed.stdout)
+            json_completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "agent_docs_doctor.py"),
+                    "audit",
+                    str(root),
+                    "--format",
+                    "json",
+                ],
+                cwd=cwd,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(json_completed.returncode, 0, json_completed.stderr)
+            self.assertEqual(json.JSONDecoder().decode(json_completed.stdout)["mode"], "read-only")
 
     def test_cli_help_version_doctor_and_text_audit_are_clear(self) -> None:
         entrypoint = [sys.executable, str(SCRIPTS / "agent_docs_doctor.py")]
@@ -1462,17 +1480,16 @@ class DoctorLibTests(unittest.TestCase):
         metadata = (ROOT / "agents/openai.yaml").read_text(encoding="utf-8")
 
         self.assertIn("Nothing was changed.", skill)
-        self.assertIn("no more than seven decision items", skill)
-        self.assertIn("D1 preview, D2 keep, D3 later", skill)
-        self.assertIn("one choice per decision ID", skill)
+        self.assertIn("Show no more than seven items", skill)
+        self.assertIn("one easy approval question", skill)
         self.assertIn("Apply this preview", skill)
         self.assertIn("preview` asks for an exact no-write change preview", skill)
         self.assertIn("Reply next to see D8 onward.", skill)
         self.assertIn("without renumbering, repeating", skill)
 
         self.assertLess(schema.index("## Default response"), schema.index("## Advanced evidence"))
-        self.assertIn("**Safe default:**", schema)
-        self.assertIn("Never show `D2 keep, D2 later`", schema)
+        self.assertIn("**If you are unsure:**", schema)
+        self.assertIn("Do not require the user to choose internal IDs", schema)
         self.assertIn("Nothing has been changed yet.", schema)
         self.assertIn("12 decisions need review. Showing D1–D7.", schema)
         self.assertIn("Requesting `preview` in the decision review does not authorize writes", migration)
