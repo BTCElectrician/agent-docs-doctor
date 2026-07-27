@@ -1,6 +1,6 @@
 # Agent Docs Doctor status
 
-Last updated: 2026-07-24
+Last updated: 2026-07-27
 
 ## Current state
 
@@ -23,6 +23,11 @@ It now provides:
 - a stable one-decision-at-a-time review flow, including `next` pagination after the first seven
   decisions.
 
+The default `audit` output is now a human-first, plain-language diagnosis: what was found, where it
+was found, why it matters, and what to do next. It says nothing changed and asks one approval
+question. Technical evidence remains in explicit `--format json` output or on request; the report
+schema, read-only audit, preview, and explicit-approval boundaries are unchanged.
+
 ## Safety boundary
 
 Repository auditing is read-only. The product has no command that deletes, rewrites, archives, or
@@ -40,7 +45,7 @@ publish launch messaging or media.
 
 ## Acceptance evidence
 
-- 184 unit, fixture, resource-bound, validator, traversal, privacy, no-write, public-safety, and
+- 185 unit, fixture, resource-bound, validator, traversal, privacy, no-write, public-safety, and
   installer-race tests pass locally; three Windows-only junction/audit-pinning/installer-pinning
   tests are skipped on macOS and exercised by the hosted Windows matrix.
 - Ruff, Pyright, cache-free syntax checks, both report-validator paths, the official skill
@@ -57,6 +62,13 @@ publish launch messaging or media.
   repeated-pattern scans.
 - Local passing gates are evidence, not proof of all host or filesystem behavior. The exact pushed
   commit must also pass all Linux, macOS, and Windows jobs on Python 3.10 and 3.13.
+
+### 2026-07-27 human-first default report
+
+- Added a synthetic `human-report` end-to-end fixture covering a missing link, competing current
+  documents, a duplicated skill, and intentionally repeatable safety guidance.
+- Local validation passed: 185 tests (3 platform-specific skips), schema contract, no-write check,
+  public-safety scan, Ruff, Pyright, package build, and `git diff --check`.
 
 Every push to `main` runs the hosted Linux, macOS, and Windows matrix. The detailed local commands,
 evaluation provenance, and limitations are recorded in the linked repository documents.

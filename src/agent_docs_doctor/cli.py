@@ -64,8 +64,8 @@ def parser() -> argparse.ArgumentParser:
     audit.add_argument(
         "--format",
         choices=("json", "text"),
-        default="json",
-        help="output format (default: json)",
+        default="text",
+        help="output format (default: text; use json for machine-readable evidence)",
     )
     audit.add_argument("--pretty", action="store_true", help="pretty-print JSON")
 

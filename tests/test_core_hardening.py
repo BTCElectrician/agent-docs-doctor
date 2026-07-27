@@ -698,8 +698,8 @@ def test_current_report_contract_and_partial_human_output() -> None:
     assert core.validate_audit(report) == []
     json.loads(core.dump_json(report))
     rendered = audit_text(report)
-    assert "Coverage is partial" in rendered
-    assert "No deterministic signals need review" not in rendered
+    assert "Some files could not be checked" in rendered
+    assert "Everything I checked looks okay" not in rendered
 
 
 def test_dump_json_enforces_aggregate_byte_limit() -> None:

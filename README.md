@@ -13,9 +13,9 @@
 
 <p align="center"><strong>Find the stale, conflicting, duplicated, and competing instructions steering your coding agents.</strong></p>
 
-Agent Docs Doctor maps the instruction system around Codex, Claude Code, Cursor, and compatible
-agent workflows. It produces deterministic evidence first, then helps a human decide what to keep,
-fix, clarify, combine, or archive later.
+Agent Docs Doctor checks the instructions and status documents that steer Codex, Claude Code,
+Cursor, and similar tools. It explains what it found in plain English, recommends what to fix, and
+calls out what may be safer to leave alone until someone confirms the intent.
 
 The audit runs locally, requires no API key, and does not change the repository. Until an immutable
 release artifact is published, the safe first run is from a checkout whose commit you have
@@ -72,34 +72,39 @@ python3 -B scripts/agent_docs_doctor.py audit fixtures/stale-history --format te
 
 ```text
 Agent Docs Doctor
-Scanned 3 agent-facing surfaces (complete coverage).
+Checked 3 instruction and status documents.
 Nothing was changed.
 
-1 deterministic signal(s) found:
+We found 1 thing worth reviewing:
 
-E1 [HIGH] Retired metadata appears outside an archive-like path.
-   Evidence: CURRENT_PLAN.md
-   Caution: Repository policy may intentionally retain a redirect stub here.
+1. A document says it is retired but is still outside the history area.
+   Where: CURRENT_PLAN.md
+   Why it matters: It could be mistaken for current guidance unless it is clearly kept as a redirect.
+   Recommendation: Confirm its replacement, then move it to history or make the redirect explicit.
+
+Nothing has changed yet. Do you want me to prepare a no-change preview for the recommended fixes?
+Say “show details” to see the technical evidence.
 ```
 
 ## What a user gets
 
-That is evidence, not an automatic deletion recommendation. The matching Agent Skill adds
-repository-aware judgment and turns findings into a short review:
+The default report is a plain-language diagnosis. Technical evidence remains available in JSON or
+when you ask for details:
 
 ```text
-Agent Docs Doctor found 3 items worth reviewing.
+We found 3 things worth reviewing.
 Nothing was changed.
 
-D1 — Old plan is still being referenced
-What I found: The plan says it is retired, but AGENTS.md still points to it.
-Recommendation: Fix the reference, then archive the old plan.
-Safe default: Keep it unchanged until an owner confirms the current plan.
+1. An instruction points to a file that is not there.
+   Why it matters: Someone following it cannot reach the intended guidance.
+   Recommendation: Fix the link after confirming where it should lead.
 
-D2 — Repeated deployment rule
-Recommendation: Keep both copies because they protect different agent clients.
+2. The same safety rule appears twice.
+   Why it matters: This may be intentional when two agent surfaces need the same protection.
+   Recommendation: Leave it alone unless both copies cover the same job.
 
-Reply with: D1 preview, D2 keep — or say “show evidence.”
+Nothing has changed yet. Do you want me to prepare a no-change preview for the recommended fixes?
+Say "show details" to see the technical evidence.
 ```
 
 If there are more than seven decisions, the review shows seven at a time. Reply `next` for the next
@@ -293,7 +298,7 @@ needed.
    agent-docs-doctor audit . --format text
    ```
 
-3. Read each `E#` evidence item. Nothing has been changed.
+3. Read the plain-language diagnosis. Nothing has been changed.
 4. For a machine-readable ledger, save and validate JSON:
 
    ```bash
