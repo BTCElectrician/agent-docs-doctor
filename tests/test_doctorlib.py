@@ -576,13 +576,107 @@ class DoctorLibTests(unittest.TestCase):
     def test_at_reference_outside_claude_import_chain_is_not_called_automatic(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
+            self.write(root, "CLAUDE.md", "# Claude-only notes\n")
             self.write(root, "AGENTS.md", "@docs/POLICY.md\n")
             self.write(root, "docs/POLICY.md", "# Policy\n")
             inventory = build_inventory(root)
-        self.assertEqual([item["path"] for item in inventory["files"]], ["AGENTS.md"])
-        reference = inventory["files"][0]["references"][0]
+        entries = {item["path"]: item for item in inventory["files"]}
+        self.assertEqual(sorted(entries), ["AGENTS.md", "CLAUDE.md"])
+        self.assertNotIn("claude-code", entries["AGENTS.md"]["platforms"])
+        reference = entries["AGENTS.md"]["references"][0]
         self.assertEqual(reference["edge_type"], "at-reference")
         self.assertEqual(reference["resolution"], "in-scope")
+
+    def test_claude_code_reads_agents_md_and_its_imports_without_claude_md(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "AGENTS.md", "@docs/POLICY.md\n")
+            self.write(root, "docs/POLICY.md", "# Policy\n")
+            inventory = build_inventory(root)
+        entries = {item["path"]: item for item in inventory["files"]}
+        self.assertEqual(sorted(entries), ["AGENTS.md", "docs/POLICY.md"])
+        self.assertIn("claude-code", entries["AGENTS.md"]["platforms"])
+        reference = entries["AGENTS.md"]["references"][0]
+        self.assertEqual(reference["edge_type"], "automatic-import")
+        self.assertEqual(reference["resolution"], "inventoried")
+        self.assertEqual(entries["docs/POLICY.md"]["discovered_by"], "automatic-import")
+        self.assertEqual(entries["docs/POLICY.md"]["platforms"], ["claude-code"])
+
+    def test_claude_md_in_directory_or_ancestor_suppresses_claude_agents_md(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "AGENTS.md", "# Root\n")
+            self.write(root, "services/api/AGENTS.md", "# API\n")
+            self.write(root, "services/api/.claude/CLAUDE.md", "# API Claude\n")
+            self.write(root, "services/api/handlers/AGENTS.md", "# Handlers\n")
+            self.write(root, "tools/AGENTS.md", "# Tools\n")
+            self.write(root, "tools/CLAUDE.local.md", "# Personal\n")
+            self.write(root, "web/.claude/AGENTS.md", "# Web\n")
+            entries = {item["path"]: item for item in build_inventory(root)["files"]}
+        self.assertIn("claude-code", entries["AGENTS.md"]["platforms"])
+        self.assertIn("claude-code", entries["web/.claude/AGENTS.md"]["platforms"])
+        for path in ("services/api/AGENTS.md", "services/api/handlers/AGENTS.md", "tools/AGENTS.md"):
+            with self.subTest(path=path):
+                self.assertNotIn("claude-code", entries[path]["platforms"])
+                self.assertIn("cursor", entries[path]["platforms"])
+
+    def test_imports_beyond_documented_claude_depth_are_not_called_automatic(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "CLAUDE.md", "@docs/one.md\n")
+            for index, (name, target) in enumerate(
+                (("one", "two"), ("two", "three"), ("three", "four"), ("four", "five"), ("five", None))
+            ):
+                body = f"# Level {index + 1}\n" + (f"@{target}.md\n" if target else "")
+                self.write(root, f"docs/{name}.md", body)
+            entries = {item["path"]: item for item in build_inventory(root)["files"]}
+        self.assertEqual(entries["docs/four.md"]["loading"], "automatic")
+        self.assertIn("claude-code", entries["docs/four.md"]["platforms"])
+        self.assertEqual(entries["docs/five.md"]["discovered_by"], "automatic-import")
+        self.assertEqual(entries["docs/five.md"]["loading"], "manual")
+        self.assertNotIn("claude-code", entries["docs/five.md"]["platforms"])
+        self.assertEqual(
+            entries["docs/five.md"]["classification_basis"],
+            "import beyond documented Claude Code depth",
+        )
+
+    def test_copilot_gemini_and_legacy_cursor_surfaces_are_classified(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, "CLAUDE.md", "# Claude\n")
+            self.write(root, "GEMINI.md", "# Gemini\n")
+            self.write(root, "packages/ui/GEMINI.md", "# UI Gemini\n")
+            self.write(root, ".cursorrules", "Use tabs.\n")
+            self.write(root, ".github/copilot-instructions.md", "# Copilot\n")
+            self.write(
+                root,
+                ".github/instructions/frontend/react.instructions.md",
+                '---\napplyTo: "src/**/*.tsx"\n---\n# React\n',
+            )
+            self.write(root, ".github/instructions/manual.instructions.md", "# Manual\n")
+            entries = {item["path"]: item for item in build_inventory(root)["files"]}
+        self.assertEqual(entries["CLAUDE.md"]["platforms"], ["claude-code", "github-copilot"])
+        self.assertEqual(entries["GEMINI.md"]["platforms"], ["gemini-cli", "github-copilot"])
+        self.assertEqual(entries["GEMINI.md"]["loading"], "automatic")
+        self.assertEqual(entries["packages/ui/GEMINI.md"]["platforms"], ["gemini-cli"])
+        self.assertEqual(entries[".cursorrules"]["kind"], "legacy-rule-file")
+        self.assertEqual(entries[".cursorrules"]["loading"], "platform-dependent")
+        copilot = entries[".github/copilot-instructions.md"]
+        self.assertEqual((copilot["kind"], copilot["platforms"]), ("instruction", ["github-copilot"]))
+        self.assertEqual(copilot["loading"], "automatic")
+        scoped = entries[".github/instructions/frontend/react.instructions.md"]
+        self.assertEqual((scoped["kind"], scoped["loading"]), ("scoped-rule", "conditional"))
+        self.assertEqual(entries[".github/instructions/manual.instructions.md"]["loading"], "manual")
+
+    def test_codex_fallback_named_claude_md_keeps_claude_code_loading(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            self.write(root, ".codex/config.toml", 'project_doc_fallback_filenames = ["CLAUDE.md"]\n')
+            self.write(root, "CLAUDE.md", "# Shared\n")
+            entries = {item["path"]: item for item in build_inventory(root)["files"]}
+        claude = entries["CLAUDE.md"]
+        self.assertEqual(claude["platforms"], ["claude-code", "codex", "github-copilot"])
+        self.assertEqual(claude["loading"], "automatic")
 
     def test_claude_import_cycle_is_bounded_and_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -1205,7 +1299,7 @@ class DoctorLibTests(unittest.TestCase):
             self.write(root, "AGENTS_HISTORY.md", "# History\n")
             entries = {item["path"]: item for item in build_inventory(root)["files"]}
         self.assertEqual(entries["AGENTS.override.md"]["platforms"], ["codex"])
-        self.assertEqual(entries["AGENTS.md"]["platforms"], ["cursor"])
+        self.assertEqual(entries["AGENTS.md"]["platforms"], ["claude-code", "cursor", "github-copilot"])
         self.assertEqual(entries["AGENTS_HISTORY.md"]["kind"], "reference")
         self.assertEqual(entries["AGENTS_HISTORY.md"]["loading"], "manual")
 
@@ -1528,7 +1622,7 @@ class DoctorLibTests(unittest.TestCase):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('agent-docs-doctor = "agent_docs_doctor.cli:main"', pyproject)
         self.assertIn('"share/agent-docs-doctor/skill"', pyproject)
-        self.assertIn('requires = ["setuptools==77.0.3", "wheel==0.45.1"]', pyproject)
+        self.assertIn('requires = ["setuptools==83.0.0", "wheel==0.47.0"]', pyproject)
 
 
 if __name__ == "__main__":

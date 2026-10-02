@@ -12,7 +12,7 @@ import re
 import stat
 import sys
 from collections import defaultdict, deque
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from itertools import islice
@@ -39,6 +39,10 @@ MAX_IGNORE_EVALUATIONS = 2_000_000
 MAX_CANDIDATE_FILES = 10_000
 MAX_TOTAL_READ_BYTES = 50_000_000
 MAX_IMPORT_DEPTH = 10
+# Claude Code memory docs (verified 2026-10-02): imported files can recursively
+# import other files "with a maximum depth of four hops". MAX_IMPORT_DEPTH above is
+# the engine's resource bound; this value only limits the automatic-loading label.
+CLAUDE_CODE_MAX_IMPORT_HOPS = 4
 MAX_WALK_ENTRIES = 100_000
 MAX_REFERENCES = 2_000
 MAX_REFERENCES_PER_FILE = 500
@@ -98,6 +102,7 @@ EXACT_NAMES = {
     "agents.override.md",
     "claude.md",
     "claude.local.md",
+    "gemini.md",
     "skill.md",
     "status.md",
     "handoff.md",
@@ -965,9 +970,64 @@ def is_candidate(relative: PurePosixPath, fallback_names: frozenset[str] = froze
         return True
     if name in {"settings.json", "settings.local.json"} and ".claude" in parts_lower:
         return True
-    if name in {".cursorignore", ".cursorindexingignore"}:
+    if name in {".cursorignore", ".cursorindexingignore", ".cursorrules"}:
+        return True
+    if is_copilot_instruction_path(parts_lower):
         return True
     return suffix in TEXT_SUFFIXES and name_has_hint(relative.stem)
+
+
+def is_copilot_instruction_path(parts_lower: tuple[str, ...]) -> bool:
+    """Return whether lowercase path parts name a GitHub Copilot instruction file."""
+
+    if parts_lower == (".github", "copilot-instructions.md"):
+        return True
+    return (
+        len(parts_lower) >= 3
+        and parts_lower[:2] == (".github", "instructions")
+        and parts_lower[-1].endswith(".instructions.md")
+    )
+
+
+def instruction_home(relative: PurePosixPath) -> PurePosixPath:
+    """Return the directory a Claude Code project instruction file applies to.
+
+    Claude Code reads ``CLAUDE.md`` and ``AGENTS.md`` either directly in a
+    directory or inside that directory's ``.claude`` folder.
+    """
+
+    parent = relative.parent
+    if parent.name.lower() == ".claude":
+        return parent.parent
+    return parent
+
+
+def claude_code_agents_paths(relatives: Iterable[PurePosixPath]) -> frozenset[str]:
+    """Select AGENTS.md files Claude Code reads under its default setting.
+
+    Claude Code's default ``claude-md-or-agents-md`` mode reads ``AGENTS.md``
+    only when no ``CLAUDE.md``, ``.claude/CLAUDE.md``, or ``CLAUDE.local.md``
+    exists in that directory or above it. Only files inside the audit root are
+    visible here, and user settings can change the mode, so the result is a
+    filename inference rather than an observed load.
+    """
+
+    candidates = list(relatives)
+    claude_homes: set[PurePosixPath] = set()
+    for relative in candidates:
+        name = relative.name.lower()
+        in_dot_claude = relative.parent.name.lower() == ".claude"
+        if name == "claude.md" or (name == "claude.local.md" and not in_dot_claude):
+            claude_homes.add(instruction_home(relative))
+    selected: set[str] = set()
+    for relative in candidates:
+        if relative.name.lower() != "agents.md":
+            continue
+        home = instruction_home(relative)
+        if home in claude_homes or any(parent in claude_homes for parent in home.parents):
+            continue
+        selected.add(relative.as_posix())
+    return frozenset(selected)
 
 
 def is_discovery_control(relative: PurePosixPath) -> bool:
@@ -1510,6 +1570,7 @@ def classify(
     metadata: dict[str, Any],
     fallback_names: frozenset[str],
     selected_codex_paths: frozenset[str],
+    claude_agents_paths: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     name = relative.name.lower()
     tokens = name_tokens(relative.stem)
@@ -1522,18 +1583,38 @@ def classify(
 
     relative_text = relative.as_posix()
     selected_by_codex = relative_text in selected_codex_paths
+    at_root = len(parts) == 1
+    platforms: list[str]
 
     if name == "agents.override.md":
         kind, platforms, loading, role = "instruction", ["codex"], "automatic", "authority"
     elif name == "agents.md":
-        platforms = ["cursor"] + (["codex"] if selected_by_codex else [])
+        platforms = ["cursor", "github-copilot"]
+        if selected_by_codex:
+            platforms.append("codex")
+        if relative_text in claude_agents_paths:
+            platforms.append("claude-code")
         kind, loading, role = "instruction", "automatic", "authority"
+    elif name in {"claude.md", "claude.local.md", "gemini.md"}:
+        platforms = ["gemini-cli"] if name == "gemini.md" else ["claude-code"]
+        if at_root and name != "claude.local.md":
+            platforms.append("github-copilot")
+        if selected_by_codex:
+            platforms.append("codex")
+        kind, loading, role = "instruction", "automatic", "adapter"
     elif relative.name in fallback_names:
         kind, platforms = "instruction-candidate", ["codex"]
         loading = "automatic" if selected_by_codex else "not-loaded"
         role = "authority" if selected_by_codex else "reference"
-    elif name in {"claude.md", "claude.local.md"}:
-        kind, platforms, loading, role = "instruction", ["claude-code"], "automatic", "adapter"
+    elif is_copilot_instruction_path(parts):
+        if len(parts) == 2:
+            kind, platforms, loading, role = "instruction", ["github-copilot"], "automatic", "authority"
+        else:
+            targeted = "applyTo" in metadata or bool(metadata.get("description"))
+            kind, platforms, role = "scoped-rule", ["github-copilot"], "procedure"
+            loading = "conditional" if targeted else "manual"
+    elif name == ".cursorrules":
+        kind, platforms, loading, role = "legacy-rule-file", ["cursor"], "platform-dependent", "procedure"
     elif in_rules_tree(parts, ".claude"):
         scoped = "paths" in metadata
         kind, platforms, loading, role = (
@@ -1565,7 +1646,7 @@ def classify(
         role = metadata_role.lower()
     return {
         "kind": kind,
-        "platforms": platforms,
+        "platforms": sorted(platforms),
         "loading": loading,
         "role": role,
         "archive": archive,
@@ -1964,7 +2045,11 @@ def _collect_inventory(root_value: str | Path) -> dict[str, Any]:
     fallback_names = frozenset(fallback_sequence)
     paths, skipped, matcher, discovery_incomplete = walk_candidates(root, fallback_names)
     path_set = set(paths)
+    claude_agents_paths = claude_code_agents_paths(
+        PurePosixPath(path.relative_to(root).as_posix()) for path in paths
+    )
     imported_paths: set[PurePosixPath] = set()
+    imported_depths: dict[PurePosixPath, int] = {}
     import_exclusions: dict[PurePosixPath, str] = {}
     read_results: dict[Path, tuple[str | None, str | None, int | None, str | None]] = {}
     total_read_bytes = 0
@@ -1996,7 +2081,10 @@ def _collect_inventory(root_value: str | Path) -> dict[str, Any]:
         if text is None:
             continue
         relative = PurePosixPath(path.relative_to(root).as_posix())
-        is_claude_surface = relative.name.lower() in {"claude.md", "claude.local.md"}
+        is_claude_surface = (
+            relative.name.lower() in {"claude.md", "claude.local.md"}
+            or relative.as_posix() in claude_agents_paths
+        )
         if not (is_claude_surface or reached_by_import):
             continue
         masked_import_text = mask_fenced_code(text)
@@ -2052,6 +2140,9 @@ def _collect_inventory(root_value: str | Path) -> dict[str, Any]:
                 imported_paths.add(relative_candidate)
                 continue
             queued_import_depth[candidate] = next_depth
+            imported_depths[relative_candidate] = min(
+                next_depth, imported_depths.get(relative_candidate, next_depth)
+            )
             if candidate in path_set:
                 imported_paths.add(relative_candidate)
                 queue.append((candidate, next_depth, True))
@@ -2127,7 +2218,9 @@ def _collect_inventory(root_value: str | Path) -> dict[str, Any]:
                 root,
                 inventoried_paths,
                 import_exclusions,
-                relative.name.lower() in {"claude.md", "claude.local.md"} or relative in imported_paths,
+                relative.name.lower() in {"claude.md", "claude.local.md"}
+                or relative.as_posix() in claude_agents_paths
+                or relative in imported_paths,
                 scan_budget,
             )
             lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
@@ -2141,9 +2234,20 @@ def _collect_inventory(root_value: str | Path) -> dict[str, Any]:
         if metadata_error:
             warnings.append({"path": relative.as_posix(), "message": metadata_error})
             matcher.coverage_reasons.add("frontmatter interpretation was incomplete")
-        classification = classify(relative, metadata, fallback_names, selected_codex_paths)
-        if relative in imported_paths:
-            platforms = list(dict.fromkeys([*classification["platforms"], "claude-code"]))
+        classification = classify(
+            relative,
+            metadata,
+            fallback_names,
+            selected_codex_paths,
+            claude_agents_paths,
+        )
+        if relative in imported_paths and imported_depths.get(relative, 0) > CLAUDE_CODE_MAX_IMPORT_HOPS:
+            classification = {
+                **classification,
+                "classification_basis": "import beyond documented Claude Code depth",
+            }
+        elif relative in imported_paths:
+            platforms = sorted({*classification["platforms"], "claude-code"})
             classification = {
                 **classification,
                 "platforms": platforms,
