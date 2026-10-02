@@ -1,6 +1,6 @@
 ---
 name: agent-docs-doctor
-description: Audit and improve agent-facing repository documentation across Codex, Claude Code, Cursor, and compatible Agent Skills consumers. Use when asked to inspect AGENTS.md, CLAUDE.md, .claude/rules, .cursor/rules, skills, status or handoff files, startup manifests, instruction conflicts, duplicated rules, stale plans, context bloat, authority ambiguity, or an incumbent-versus-challenger documentation redesign. Default to read-only evidence collection and require explicit approval before rewriting or migrating repository governance.
+description: Audit and improve agent-facing repository documentation across Codex, Claude Code, Cursor, GitHub Copilot, Gemini CLI, and compatible Agent Skills consumers. Use when asked to inspect AGENTS.md, CLAUDE.md, GEMINI.md, .claude/rules, .cursor/rules, .cursorrules, Copilot instruction files, skills, status or handoff files, startup manifests, instruction conflicts, duplicated rules, stale plans, context bloat, authority ambiguity, or an incumbent-versus-challenger documentation redesign. Default to read-only evidence collection and require explicit approval before rewriting or migrating repository governance.
 ---
 
 # Agent Docs Doctor
@@ -58,10 +58,14 @@ candidate, or exhausted cap makes coverage partial. A partial or skipped audit i
 not proof that omitted material is irrelevant or safe. Do not give a clean bill of health from an
 incomplete scan.
 
-Recognized `CLAUDE.md` imports are typed automatic-import edges. The engine inventories safe,
-in-root imported files even when their filenames would not otherwise match discovery heuristics.
-Missing, ignored, secret-like, non-regular, invalid, depth-limited, and out-of-root imports remain
-visible as typed dispositions and are not opened.
+Recognized `CLAUDE.md` imports are typed automatic-import edges. So are imports in an `AGENTS.md`
+that Claude Code reads directly because no `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md`
+exists in its directory or above it inside the root. The engine inventories safe, in-root imported
+files even when their filenames would not otherwise match discovery heuristics. Files more than
+four import hops deep stay in the inventory but are not labeled as automatically loaded. Missing,
+ignored, secret-like, non-regular, invalid, depth-limited, and out-of-root imports remain visible as
+typed dispositions and are not opened. Only imports on a line of their own are recognized; treat
+inline `@path` mentions as possible imports that need judgment.
 
 Treat a repository that changes during collection as a potentially mixed snapshot. If warnings or
 external evidence suggest concurrent mutation, rerun against a stable checkout before relying on

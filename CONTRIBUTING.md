@@ -31,7 +31,7 @@ uv run --frozen --no-sync python -m build --no-isolation
 ```
 
 Run the current official skill validator against the repository root. CI repeats the full gates on
-Linux, macOS, and Windows for Python 3.10 and 3.13, compares bundled skill and schema bytes between
+Linux, macOS, and Windows for Python 3.10 and 3.14, compares bundled skill and schema bytes between
 the wheel and source archive, then installs each archive without runtime dependencies into a
 separate fresh environment and smokes both installed CLIs. If dependencies change, regenerate
 `uv.lock`, inspect its source URLs and hashes, and keep build-system dependencies exactly

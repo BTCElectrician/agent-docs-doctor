@@ -10,7 +10,7 @@ The strongest product is not another instruction generator or universal readines
 
 Three observations support that position:
 
-1. Official platform behavior differs materially. Codex chooses one instruction file per directory; Claude has imports, ancestor memory, path rules, skills, and event hooks; Cursor distinguishes MDC rule modes, nested `AGENTS.md`, skills, surface-specific hooks, and incomplete ignore boundaries.
+1. Official platform behavior differs materially. Codex chooses one instruction file per directory; Claude has imports, ancestor memory, path rules, skills, event hooks, and now conditional `AGENTS.md` reading; Cursor distinguishes MDC rule modes, nested `AGENTS.md`, skills, surface-specific hooks, and incomplete ignore boundaries.
 2. Existing products specialize. Readiness suites, generators, migration tools, conflict vocabularies, context-size audits, and enforcement mappers each cover part of the problem.
 3. The dangerous gap is between measured syntax and operational meaning. Exact overlap is easy to prove; whether it is a harmful duplicate, a cross-client adapter, or a deliberately repeated safety rule requires traceable judgment.
 
@@ -33,6 +33,16 @@ Therefore Agent Docs Doctor uses a deterministic evidence ledger without a numer
 | [rulesentry](https://github.com/mohamedzhioua/rulesentry) | Unicode/instruction-smuggling scanner; 2 stars; MIT; v0.2.0 | agent config has a supply-chain security surface | intentionally narrow; complementary rather than competing |
 | [agent-standard-oss](https://github.com/anmoln7/agent-standard-oss) | canonicalization/drift convention; 13 stars; MIT; v0.10.0 | cross-client canonicalization can be automated | a doctor should diagnose before prescribing one convention |
 | [agents.md](https://github.com/agentsmd/agents.md) | flexible format/ecosystem; 23,036 stars; MIT | `AGENTS.md` is established infrastructure | flexibility is not a semantic validation schema |
+
+### 2026-10-02 update
+
+Two first-party changes affect this landscape. Claude Code now reads `AGENTS.md` directly when no
+`CLAUDE.md` is present, and it ships `/doctor prompt-audit`, a model-driven review of Claude Code
+instruction files that proposes edits without applying them. GitHub Copilot reads
+`.github/copilot-instructions.md`, path-specific `.instructions.md` files, `AGENTS.md`, and a root
+`CLAUDE.md` or `GEMINI.md`. More clients now share the same files, which strengthens the case for
+one reproducible, cross-tool inventory. The star counts and releases in the table above were not
+re-checked.
 
 Requested names that are not standalone products:
 

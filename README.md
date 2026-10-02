@@ -7,15 +7,16 @@
 <p align="center">
   <a href="https://github.com/BTCElectrician/agent-docs-doctor/actions/workflows/ci.yml"><img src="https://github.com/BTCElectrician/agent-docs-doctor/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
-  <img src="https://img.shields.io/badge/Python-3.10--3.13-3776AB.svg" alt="Python 3.10 through 3.13">
+  <img src="https://img.shields.io/badge/Python-3.10--3.14-3776AB.svg" alt="Python 3.10 through 3.14">
   <img src="https://img.shields.io/badge/audit-read--only-16a34a.svg" alt="Read-only audit">
 </p>
 
 <p align="center"><strong>Find the stale, conflicting, duplicated, and competing instructions steering your coding agents.</strong></p>
 
 Agent Docs Doctor checks the instructions and status documents that steer Codex, Claude Code,
-Cursor, and similar tools. It explains what it found in plain English, recommends what to fix, and
-calls out what may be safer to leave alone until someone confirms the intent.
+Cursor, GitHub Copilot, Gemini CLI, and other tools that read `AGENTS.md` or Agent Skills. It
+explains what it found in plain English, recommends what to fix, and calls out what may be safer to
+leave alone until someone confirms the intent.
 
 The audit runs locally, requires no API key, and does not change the repository. Until an immutable
 release artifact is published, the safe first run is from a checkout whose commit you have
@@ -40,13 +41,16 @@ executes it immediately.
 
 ## TL;DR
 
-**The problem:** Coding agents increasingly read repository instructions carefully. When an old
-plan, forgotten adapter, duplicated rule, or competing status file remains discoverable, that
-extra context can steer the agent away from current reality.
+**The problem:** Coding agents follow repository instructions closely, and more tools now read the
+same files. Claude Code reads `AGENTS.md` directly when a repository has no `CLAUDE.md`, and
+[OpenAI's current model guidance](https://developers.openai.com/api/docs/guides/latest-model)
+warns that its newest model can be more sensitive to instructions in skills and files such as
+`AGENTS.md`. When an old plan, forgotten adapter, duplicated rule, or competing status file stays
+discoverable, that extra context can steer an agent away from current reality.
 
-**The solution:** Agent Docs Doctor reconstructs the instruction surfaces first. It reports what
-exists, how it may load, what overlaps, which references are broken, and where current-state claims
-compete—without pretending it can infer organizational intent from a filename.
+**What Agent Docs Doctor does:** It maps the instruction surfaces first. It reports what exists,
+which tools may load each file, what overlaps, which references are broken, and where
+current-state claims compete. It does not guess organizational intent from a filename.
 
 ### Why use Agent Docs Doctor?
 
@@ -55,7 +59,7 @@ compete—without pretending it can infer organizational intent from a filename.
 | **Evidence before opinion** | Relative paths, hashes, byte counts, loading classifications, references, and exact overlap |
 | **Human-sized decisions** | Stable choices such as **Keep**, **Fix**, **Clarify**, **Combine**, **Archive later**, or **Ask an owner** |
 | **Read-only audit path** | Audits do not mutate the target repository; previews propose operations without applying them |
-| **Platform-aware discovery** | Recognizes Codex, Claude Code, Cursor, Agent Skills, and common status/handoff surfaces |
+| **Platform-aware discovery** | Recognizes Codex, Claude Code, Cursor, GitHub Copilot, Gemini CLI, Agent Skills, and common status/handoff surfaces |
 | **Privacy-minimized output** | Avoids paragraph bodies, timestamps, absolute local paths, and secret-like files |
 | **Deterministic CLI** | Zero runtime dependencies, JSON schemas, stable validator exits, and repeatable output |
 
@@ -89,22 +93,38 @@ Say “show details” to see the technical evidence.
 ## What a user gets
 
 The default report is a plain-language diagnosis. Technical evidence remains available in JSON or
-when you ask for details:
+when you ask for details. This is the unedited output for the `human-report` fixture
+(`python3 -B scripts/agent_docs_doctor.py audit fixtures/human-report --format text`):
 
 ```text
-We found 3 things worth reviewing.
+Agent Docs Doctor
+Checked 7 instruction and status documents.
 Nothing was changed.
 
+We found 4 things worth reviewing:
+
 1. An instruction points to a file that is not there.
-   Why it matters: Someone following it cannot reach the intended guidance.
+   Where: AGENTS.md
+   Why it matters: The link points to `docs/missing-guide.md`, so a person or agent following it cannot reach the intended guidance.
    Recommendation: Fix the link after confirming where it should lead.
 
-2. The same safety rule appears twice.
-   Why it matters: This may be intentional when two agent surfaces need the same protection.
-   Recommendation: Leave it alone unless both copies cover the same job.
+2. Both documents look like they describe the current state.
+   Where: STATUS.md, docs/RELEASE_STATUS.md
+   Why it matters: People and agents may not know which one is the source of truth.
+   Recommendation: Choose the main document, then clearly label or archive confirmed outdated copies.
+
+3. The same instruction appears in two documents.
+   Where: SKILL.md, services/release/SKILL.md
+   Why it matters: Repeated guidance can drift later, but it may be intentional when different tools or folders need it.
+   Recommendation: Keep one only if the copies cover the same job; otherwise leave both in place.
+
+4. The same safety rule appears in two documents.
+   Where: AGENT_SAFETY.md, services/payments/AGENTS.md
+   Why it matters: This can be intentional when separate agent surfaces each need the same protection.
+   Recommendation: Leave it alone unless an owner confirms that both copies cover the same scope.
 
 Nothing has changed yet. Do you want me to prepare a no-change preview for the recommended fixes?
-Say "show details" to see the technical evidence.
+Say “show details” to see the technical evidence.
 ```
 
 If there are more than seven decisions, the review shows seven at a time. Reply `next` for the next
@@ -145,9 +165,12 @@ The deterministic engine finds facts. The skill helps interpret them. Neither tr
 
 ## What it audits
 
-- `AGENTS.md`, `AGENTS.override.md`, and configured Codex fallback names;
-- `CLAUDE.md` imports and `.claude/rules`;
-- `.cursor/rules`;
+- `AGENTS.md`, `AGENTS.override.md`, and configured Codex fallback names, including which
+  `AGENTS.md` files Claude Code reads when no `CLAUDE.md` is present;
+- `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, their `@path` imports, and `.claude/rules`;
+- `.cursor/rules` and a legacy root `.cursorrules`;
+- `.github/copilot-instructions.md` and `.github/instructions/**/*.instructions.md`;
+- `GEMINI.md`;
 - Agent Skill manifests and supporting files located inside the requested root;
 - status, handoff, work-queue, authority, and planning documents;
 - configuration that changes instruction selection;
@@ -164,7 +187,7 @@ documented in [`references/PLATFORM_BEHAVIOR.md`](references/PLATFORM_BEHAVIOR.m
 | Capability | Agent Docs Doctor | Manual review | Markdown/link lint | LLM-only review |
 | --- | --- | --- | --- | --- |
 | Reproducible inventory | **Yes** | Inconsistent | File-by-file | Prompt-dependent |
-| Platform loading context | **Codex, Claude Code, Cursor** | Reviewer-dependent | No | Model-dependent |
+| Platform loading context | **Codex, Claude Code, Cursor, Copilot, Gemini CLI** | Reviewer-dependent | No | Model-dependent |
 | Exact-overlap evidence | **Hashed and location-based** | Time-consuming | No | Often paraphrased |
 | Human judgment | **Separate decision layer** | Yes | No | Yes |
 | Read-only default | **Enforced audit path** | Depends | Usually | Depends on tools |
@@ -174,6 +197,11 @@ documented in [`references/PLATFORM_BEHAVIOR.md`](references/PLATFORM_BEHAVIOR.m
 Use a plain Markdown linter when you only need formatting or link syntax. Use manual review when the
 repository is tiny and its ownership is obvious. Use Agent Docs Doctor when you need a repeatable
 map before deciding which instructions should survive.
+
+Claude Code's built-in `/doctor prompt-audit` is a model-driven review of Claude Code's own
+instruction files. Agent Docs Doctor works without a model or client, covers several tools'
+surfaces in one inventory, and returns the same JSON for the same checkout, so the two can be used
+together.
 
 ## Installation
 
@@ -250,7 +278,8 @@ equality, not that a person reviewed or approved the preview.
 
 The installer mutates only validated missing ancestors under the selected user home, the selected
 user-level skill destination, a same-parent private staging entry, and the
-`~/.agent-docs-doctor/backups` reservation shown by the plan—never the repository being audited.
+`~/.agent-docs-doctor/backups` reservation shown by the plan. It never writes to the repository
+being audited.
 Existing unmanaged destinations, path aliases, and link or reparse-point ancestors are rejected.
 Updates and uninstalls move the entire validated managed destination, including unrecognized extra
 files, intact into a collision-resistant backup container before replacement. Backups are not
@@ -538,7 +567,7 @@ Check the active interpreter:
 python3 --version
 ```
 
-Then run the command with a Python 3.10–3.13 interpreter.
+Then run the command with Python 3.10 or newer. CI tests 3.10 and 3.14.
 
 ### The audit reports `partial` coverage
 
@@ -605,6 +634,12 @@ itself is incorrect.
   audit.
 - **Conservative parsing:** frontmatter and Markdown references are parsed without third-party
   dependencies; malformed or complex constructs may remain judgment evidence.
+- **Import subset:** only `@path` imports on a line of their own are followed. Claude Code also
+  accepts inline imports, which the auditor does not expand. Gemini CLI `@file` imports and its
+  `context.fileName` setting are not interpreted.
+- **Filename-based loading labels:** a `platforms` or `loading` value is an inference from
+  filenames, locations, and frontmatter inside the audited root. Files above the root, user
+  settings, and client versions can change what actually loads.
 - **Platform behavior changes:** official loading and precedence rules are dated and must be
   reverified as clients evolve.
 - **Installer apply platform boundary:** preview is portable, but secure apply is limited to Darwin
@@ -619,8 +654,9 @@ itself is incorrect.
 ### Is Agent Docs Doctor limited to Claude?
 
 No. The deterministic CLI is model-agnostic. Discovery currently includes Codex, Claude Code,
-Cursor, Agent Skills, and common repository status and planning surfaces. Any human or tool capable
-of reading the text or JSON report can use its evidence.
+Cursor, GitHub Copilot, Gemini CLI, Agent Skills, and common repository status and planning
+surfaces. Any human or tool capable of reading the text or JSON report can use its evidence. The
+installer places the optional skill for Codex, Claude Code, or Cursor.
 
 ### Does the audit modify or delete anything?
 
@@ -679,7 +715,7 @@ uv run --frozen --no-sync pyright
 uv run --frozen --no-sync python -m build --no-isolation
 ```
 
-CI runs those gates on Linux, macOS, and Windows with Python 3.10 and 3.13. Each job also builds the
+CI runs those gates on Linux, macOS, and Windows with Python 3.10 and 3.14. Each job also builds the
 wheel and source distribution with the exact locked backend, compares every bundled skill and
 schema byte across the two archives, installs each archive without runtime dependencies into a
 separate fresh environment, and smokes both installed console commands. Run the current official
