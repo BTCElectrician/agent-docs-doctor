@@ -1622,7 +1622,7 @@ class DoctorLibTests(unittest.TestCase):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('agent-docs-doctor = "agent_docs_doctor.cli:main"', pyproject)
         self.assertIn('"share/agent-docs-doctor/skill"', pyproject)
-        self.assertIn('requires = ["setuptools==77.0.3", "wheel==0.45.1"]', pyproject)
+        self.assertIn('requires = ["setuptools==83.0.0", "wheel==0.47.0"]', pyproject)
 
 
 if __name__ == "__main__":
