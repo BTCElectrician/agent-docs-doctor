@@ -10,11 +10,28 @@
 - Environment `doctor`, complete v2 JSON Schema, engine/configuration provenance, and explicit
   complete-or-partial coverage.
 - Safe recursive inventory of recognized `CLAUDE.md` imports.
-- Linux, macOS, and Windows CI across Python 3.10 and 3.13.
+- Linux, macOS, and Windows CI across Python 3.10 and 3.14.
 - Bounded, regular-file-only report input shared by the console and standalone validators.
+- Inventory and classification for GitHub Copilot (`.github/copilot-instructions.md` and
+  `.github/instructions/**/*.instructions.md`), Gemini CLI (`GEMINI.md`), and a legacy root
+  `.cursorrules`.
 
 ### Changed
 
+- Platform labels follow the 2026-10-02 official documentation. An `AGENTS.md` is also labeled
+  `claude-code` when no `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md` exists in its
+  directory or an in-root ancestor, and its standalone `@path` lines become automatic imports.
+  Every `AGENTS.md`, plus root `CLAUDE.md` and `GEMINI.md`, is also labeled `github-copilot`.
+- Files reached by more than four import hops, Claude Code's documented maximum, keep their
+  inventory entry but are no longer labeled as automatically loaded.
+- A Codex fallback filename that is also `CLAUDE.md` or `GEMINI.md` keeps its own client's loading
+  label instead of being reported only as a Codex candidate.
+- `platforms` lists are sorted.
+- The platform reference now covers Claude Code's native `AGENTS.md` support, GitHub Copilot,
+  Gemini CLI, current Cursor and Codex skill locations, the Agent Skills field limits, and OpenAI's
+  current latest-model guidance. Moved Codex and Cursor documentation URLs were updated.
+- CI tests Python 3.10 and 3.14. Development tooling was refreshed: setuptools 83.0.0 and wheel
+  0.47.0 build pins, pytest 9, and current ruff, pyright, and build releases in `uv.lock`.
 - First-run documentation now starts with one read-only command and a plain-language result.
 - Human decision reviews support stable pagination when more than seven decisions exist.
 - Source onboarding now requires a visible checkout and commit verification instead of directly

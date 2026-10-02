@@ -1,17 +1,19 @@
 # Agent Docs Doctor status
 
-Last updated: 2026-07-27
+Last updated: 2026-10-02
 
 ## Current state
 
-The `0.3.0` hardening release is implemented in the current release worktree. Its final publication
-state is established only after the release commit is pushed and the hosted six-platform matrix
-passes for that exact commit.
+Version `0.3.0` is unreleased: there is no tag, GitHub release, or package-index upload. `main` is
+the current code. Every push to `main` runs the hosted six-job matrix (Linux, macOS, and Windows on
+Python 3.10 and 3.14).
 
 It now provides:
 
 - an installable Python CLI and a user-level Agent Skill installer for Codex, Claude Code, and
   Cursor;
+- discovery and loading labels for Codex, Claude Code, Cursor, GitHub Copilot, Gemini CLI, and
+  Agent Skills surfaces, checked against official documentation on 2026-10-02;
 - deterministic JSON and concise human-readable audits;
 - typed, bounded handling of recognized Claude instruction imports;
 - a complete v2 report contract with a deep standalone validator and published JSON Schema;
@@ -45,9 +47,10 @@ publish launch messaging or media.
 
 ## Acceptance evidence
 
-- 185 unit, fixture, resource-bound, validator, traversal, privacy, no-write, public-safety, and
-  installer-race tests pass locally; three Windows-only junction/audit-pinning/installer-pinning
-  tests are skipped on macOS and exercised by the hosted Windows matrix.
+- 190 unit, fixture, resource-bound, validator, traversal, privacy, no-write, public-safety, and
+  installer-race tests pass locally on Python 3.10, 3.12, and 3.14; three Windows-only
+  junction/audit-pinning/installer-pinning tests are skipped on macOS and exercised by the hosted
+  Windows matrix.
 - Ruff, Pyright, cache-free syntax checks, both report-validator paths, the official skill
   validator, JSON Schema validation, cross-hash-seed determinism, no-write comparison, UBS, public
   safety scanning, package build and archive parity, and isolated wheel/source installation are
@@ -61,17 +64,18 @@ publish launch messaging or media.
   cleanup, deduplicated aggregate-capped import expansion, malformed reports, and bounded
   repeated-pattern scans.
 - Local passing gates are evidence, not proof of all host or filesystem behavior. The exact pushed
-  commit must also pass all Linux, macOS, and Windows jobs on Python 3.10 and 3.13.
+  commit must also pass all Linux, macOS, and Windows jobs on Python 3.10 and 3.14.
 
-### 2026-07-27 human-first default report
+### 2026-10-02 platform currency refresh
 
-- Added a synthetic `human-report` end-to-end fixture covering a missing link, competing current
-  documents, a duplicated skill, and intentionally repeatable safety guidance.
-- Local validation passed: 185 tests (3 platform-specific skips), schema contract, no-write check,
-  public-safety scan, Ruff, Pyright, package build, and `git diff --check`.
+- Claude Code now reads `AGENTS.md` when no `CLAUDE.md` is present; the engine labels and follows
+  imports for those files. GitHub Copilot, Gemini CLI, and legacy `.cursorrules` surfaces are
+  inventoried. Imports beyond Claude Code's four-hop limit are no longer called automatic.
+- `references/PLATFORM_BEHAVIOR.md` was re-verified against official sources on 2026-10-02.
+- Build pins moved to setuptools 83.0.0 and wheel 0.47.0, with pytest 9 and refreshed dev tools.
 
-Every push to `main` runs the hosted Linux, macOS, and Windows matrix. The detailed local commands,
-evaluation provenance, and limitations are recorded in the linked repository documents.
+The detailed local commands, evaluation provenance, and limitations are recorded in the linked
+repository documents. The forward tests in `docs/FORWARD_TEST_RESULTS.md` predate this refresh.
 
 The detailed scope and deferred launch work are tracked in
 [`docs/WORLD_CLASS_PRODUCT_PLAN.md`](docs/WORLD_CLASS_PRODUCT_PLAN.md).
